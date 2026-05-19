@@ -24,26 +24,31 @@ namespace Slic3r {
 namespace GUI {
 
 #ifdef __linux__
-// Workaround for crash in WebKitGTK when loading Fluidd < v1.37.0 or Mainsail < v2.16.1.
-// Their bundled vue-resize component detects container resizes by inserting
+// Workaround for a WebKitGTK crash that happens when PrinterWebView loads pages built on
+// older Fluidd or Mainsail (Fluidd < 1.37.0, Mainsail < 2.16.1, and forks/firmware UIs
+// derived from them). Those bundles ship vue-resize, whose <resize-observer> component
+// implements container-resize detection by inserting
 //   <object aria-hidden="true" tabindex="-1" type="text/html" data="about:blank">
-// inside a <div class="resize-observer">. The very insertion of that <object> into the DOM
-// corrupts the heap in WebKitGTK's AcceleratedBackingStore and segfaults.
+// inside its <div class="resize-observer"> wrapper, then listens for 'resize' on the
+// object's contentDocument.defaultView. WebKitGTK segfaults somewhere in its handling
+// of that <object>; the simplest reliable fix is to never let it enter the DOM.
 //
-// This hook patches Node.prototype.appendChild/insertBefore and *only* swaps the child
+// We hook Node.prototype.appendChild and insertBefore, and swap the inserted child only
 // when BOTH conditions hold:
-//   1. The parent has class "resize-observer" (vue-resize's wrapper div), AND
-//   2. The child is an <object> with vue-resize's exact attribute signature.
-// Any other appendChild/insertBefore call passes through untouched, so PDF/plugin/embed
-// <object> uses elsewhere on the page are not affected.
+//   1. The parent has class "resize-observer" (vue-resize's wrapper), AND
+//   2. The child is an <object> matching vue-resize's exact attribute signature.
+// Any other appendChild / insertBefore call passes through unchanged, so unrelated
+// <object> use on the page (PDF embeds, plugins, etc.) is unaffected.
 //
-// The swap replaces the <object> with a hidden <div> shim that exposes a synthetic
-// contentDocument.defaultView (an EventTarget), and bridges a ResizeObserver on the
-// parent to fire 'resize' events on that fake view -- which is exactly what vue-resize's
-// addResizeHandlers listens to. The synthetic 'load' event fires after insertion so
-// vue-resize wires up its handlers normally.
+// The swap inserts a hidden <div> in place of the <object>. The shim exposes a synthetic
+// contentDocument.defaultView (another <div>, which inherits EventTarget); a
+// ResizeObserver on the parent forwards resize notifications to that fake defaultView,
+// so vue-resize's addResizeHandlers keeps receiving 'resize' events as expected. A
+// synthetic 'load' event is dispatched on the shim after insertion so vue-resize wires
+// up its handlers exactly as it would have on a real <object>.
 //
-// See: https://github.com/OrcaSlicer/OrcaSlicer/issues/7210
+// Credit: workaround approach by @VittC -- see
+// https://github.com/OrcaSlicer/OrcaSlicer/issues/7210#issuecomment-4479760201
 static void inject_vue_resize_workaround(wxWebView *webView)
 {
     webView->AddUserScript(
