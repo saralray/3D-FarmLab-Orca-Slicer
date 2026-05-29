@@ -500,14 +500,10 @@ int OrcaCloudServiceAgent::start()
 {
     regenerate_pkce();
 
-    // Attempt silent sign-in from stored refresh token.
-    // Use async=true so the HTTP round-trip does not block the main UI thread.
-    // start_sync_user_preset() guards with is_user_login(), so if the refresh has
-    // not completed by the time it is called the sync simply defers to the next
-    // login-complete callback — safe and preferred over a 30-second UI stall.
+    // Attempt silent sign-in from stored refresh token
     std::string stored_refresh;
     if (load_refresh_token(stored_refresh) && !stored_refresh.empty()) {
-        refresh_now(stored_refresh, "startup_refresh", true);
+        refresh_now(stored_refresh, "refresh token", false);
     }
 
     return BAMBU_NETWORK_SUCCESS;
