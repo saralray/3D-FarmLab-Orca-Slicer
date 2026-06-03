@@ -127,6 +127,33 @@ std::vector<KeyChord> parse_keys(const nlohmann::json& params) {
         throw AutomationError(kInvalidParams, "'keys' is empty");
     return { chord_from_tokens(tokens) };
 }
+
+// "paths" may be a single string ("C:/a.stl") or an array of strings. Returns the
+// non-empty absolute paths; throws kInvalidParams when paths is missing, not a
+// string/array, contains a non-string entry, or yields no non-empty path.
+std::vector<std::string> parse_paths(const nlohmann::json& params) {
+    if (!params.is_object() || !params.contains("paths"))
+        throw AutomationError(kInvalidParams, "file.open requires 'paths'");
+    const auto& p = params.at("paths");
+    std::vector<std::string> out;
+    if (p.is_string()) {
+        out.push_back(p.get<std::string>());
+    } else if (p.is_array()) {
+        for (const auto& e : p) {
+            if (!e.is_string())
+                throw AutomationError(kInvalidParams, "'paths' entries must be strings");
+            out.push_back(e.get<std::string>());
+        }
+    } else {
+        throw AutomationError(kInvalidParams, "'paths' must be a string or array");
+    }
+    out.erase(std::remove_if(out.begin(), out.end(),
+                             [](const std::string& s) { return s.empty(); }),
+              out.end());
+    if (out.empty())
+        throw AutomationError(kInvalidParams, "'paths' is empty");
+    return out;
+}
 } // namespace
 
 namespace {
@@ -193,6 +220,7 @@ nlohmann::json JsonRpcDispatcher::dispatch(const nlohmann::json& request) {
         if (method == "sync.wait_for")             return make_result(id, m_sync_wait_for(params));
         if (method == "app.state")                 return make_result(id, m_app_state(params));
         if (method == "screenshot.window")         return make_result(id, m_screenshot_window(params));
+        if (method == "file.open")                 return make_result(id, m_file_open(params));
         return make_error(id, kMethodNotFound, "unknown method: " + method);
     } catch (const AutomationError& e) {
         return make_error(id, e.code, e.what());
@@ -340,6 +368,12 @@ nlohmann::json JsonRpcDispatcher::m_screenshot_window(const nlohmann::json& para
         target_ptr = &resolved;
     }
     return image_to_json(m_backend.screenshot_window(target_ptr));
+}
+
+nlohmann::json JsonRpcDispatcher::m_file_open(const nlohmann::json& params) {
+    const std::vector<std::string> paths = parse_paths(params);
+    const int loaded = m_backend.open_files(paths);
+    return { {"ok", true}, {"loaded", loaded} };
 }
 
 }}} // namespace

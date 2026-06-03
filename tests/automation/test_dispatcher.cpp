@@ -195,3 +195,65 @@ TEST_CASE("sync.wait_for times out -> 1003", "[automation][rpc]") {
                    {"timeout_ms",30},{"poll_ms",5}}}});
     CHECK(resp.at("error").at("code") == kErrWaitTimeout);
 }
+
+TEST_CASE("file.open with an array of paths routes to backend", "[automation][rpc]") {
+    MockUiBackend mock;
+    mock.open_return_count = 3;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",1},{"method","file.open"},
+        {"params",{{"paths", json::array({"C:/abs/a.stl","C:/abs/b.stl"})}}}});
+    CHECK(resp.at("result").at("ok") == true);
+    CHECK(resp.at("result").at("loaded") == 3);
+    REQUIRE(mock.opened_paths.size() == 1);
+    REQUIRE(mock.opened_paths[0].size() == 2);
+    CHECK(mock.opened_paths[0][0] == "C:/abs/a.stl");
+    CHECK(mock.opened_paths[0][1] == "C:/abs/b.stl");
+}
+
+TEST_CASE("file.open accepts a bare string path", "[automation][rpc]") {
+    MockUiBackend mock;
+    mock.open_return_count = 1;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",2},{"method","file.open"},
+        {"params",{{"paths","C:/abs/a.stl"}}}});
+    CHECK(resp.at("result").at("loaded") == 1);
+    REQUIRE(mock.opened_paths.size() == 1);
+    REQUIRE(mock.opened_paths[0].size() == 1);
+    CHECK(mock.opened_paths[0][0] == "C:/abs/a.stl");
+}
+
+TEST_CASE("file.open with missing paths -> invalid params", "[automation][rpc]") {
+    MockUiBackend mock;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",3},{"method","file.open"},
+        {"params", json::object()}});
+    CHECK(resp.at("error").at("code") == kInvalidParams);
+    CHECK(mock.opened_paths.empty());
+}
+
+TEST_CASE("file.open with empty paths array -> invalid params", "[automation][rpc]") {
+    MockUiBackend mock;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",4},{"method","file.open"},
+        {"params",{{"paths", json::array()}}}});
+    CHECK(resp.at("error").at("code") == kInvalidParams);
+    CHECK(mock.opened_paths.empty());
+}
+
+TEST_CASE("file.open with a non-string entry -> invalid params", "[automation][rpc]") {
+    MockUiBackend mock;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",5},{"method","file.open"},
+        {"params",{{"paths", json::array({"C:/a.stl", 42})}}}});
+    CHECK(resp.at("error").at("code") == kInvalidParams);
+    CHECK(mock.opened_paths.empty());
+}
+
+TEST_CASE("file.open backend load failure -> 1007", "[automation][rpc]") {
+    MockUiBackend mock;
+    mock.open_should_fail = true;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",6},{"method","file.open"},
+        {"params",{{"paths","C:/abs/a.stl"}}}});
+    CHECK(resp.at("error").at("code") == kErrLoadFailed);
+}
