@@ -3885,15 +3885,17 @@ void MainFrame::select_tab(wxPanel* panel)
 
 int MainFrame::select_tab_by_name(const std::string& name)
 {
-    // Prepare/Preview share m_plater and sit at fixed indices (always before any
-    // conditionally-present tab), so select them by index. Every other view selects
-    // by its page window via FindPage, which stays correct even when optional tabs
-    // (e.g. Multi-device) shift the raw indices.
-    if (name == "prepare") { select_tab(size_t(tp3DEditor)); return m_tabpanel->GetSelection(); }
-    if (name == "preview") { select_tab(size_t(tpPreview));  return m_tabpanel->GetSelection(); }
-
-    wxWindow* page = nullptr;
-    if      (name == "home")         page = m_webview;
+    // Resolve every view by its page window via FindPage, so the mapping stays
+    // correct when optional tabs (e.g. Multi-device) shift raw indices, and
+    // self-disables (returns -1) in layouts where a page is absent (e.g.
+    // GCodeViewer mode has no plater page). Prepare and Preview share m_plater:
+    // it is inserted as two adjacent pages, so Prepare is FindPage(m_plater) and
+    // Preview is the next index.
+    wxWindow* page   = nullptr;
+    int       offset = 0;
+    if      (name == "prepare")      { page = m_plater; offset = 0; }
+    else if (name == "preview")      { page = m_plater; offset = 1; }
+    else if (name == "home")         page = m_webview;
     else if (name == "device")       page = m_monitor;
     else if (name == "multi_device") page = m_multi_machine;
     else if (name == "project")      page = m_project;
@@ -3901,8 +3903,10 @@ int MainFrame::select_tab_by_name(const std::string& name)
     else return -1; // unknown view name
 
     if (page == nullptr) return -1;                 // view not available in this layout
-    const int idx = m_tabpanel->FindPage(page);
-    if (idx == wxNOT_FOUND) return -1;
+    const int found = m_tabpanel->FindPage(page);
+    if (found == wxNOT_FOUND) return -1;
+    const int idx = found + offset;
+    if (idx < 0 || idx >= (int)m_tabpanel->GetPageCount()) return -1;
     select_tab(size_t(idx));
     return m_tabpanel->GetSelection();
 }

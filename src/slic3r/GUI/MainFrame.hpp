@@ -331,8 +331,9 @@ public:
     // "preview", "device", "multi_device", "project", "calibration"). Returns the
     // resulting notebook page index, or -1 if that view is unavailable in the
     // current layout. Robust to conditionally-present tabs (e.g. Multi-device) that
-    // shift raw indices: Prepare/Preview select by fixed index (they share m_plater
-    // at 1/2), every other view selects by its page window via FindPage.
+    // shift raw indices: every view selects by its page window via FindPage.
+    // Prepare/Preview share m_plater (inserted as two adjacent pages), so Prepare
+    // is FindPage(m_plater) and Preview is the next index.
     int         select_tab_by_name(const std::string& name);
     void        request_select_tab(TabPosition pos);
     int         get_calibration_curr_tab();
