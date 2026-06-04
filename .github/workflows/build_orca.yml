@@ -61,6 +61,8 @@ jobs:
         run: |
           if [ "$(uname)" = "Linux" ]; then
             pip3 install grpcio-tools
+          else
+            brew install protobuf
           fi
           python3 tools/run_codegen.py
         if: runner.os != 'Windows'
@@ -114,7 +116,7 @@ jobs:
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         run: |
           if [ -z "${{ vars.SELF_HOSTED }}" ]; then
-            brew install libtool protobuf
+            brew install libtool
             brew list
           fi
           mkdir -p ${{ github.workspace }}/deps/build/${{ inputs.arch }}
