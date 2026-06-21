@@ -29,6 +29,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PrintFarm/PrintFarmLoginDialog.hpp
     GUI/PrintFarm/PrintFarmSettingsDialog.cpp
     GUI/PrintFarm/PrintFarmSettingsDialog.hpp
+    GUI/PrintFarm/PrintFarmJobsDialog.cpp
+    GUI/PrintFarm/PrintFarmJobsDialog.hpp
     # <<< PRINTFARM
     GUI/AmsMappingPopup.cpp
     GUI/AmsMappingPopup.hpp

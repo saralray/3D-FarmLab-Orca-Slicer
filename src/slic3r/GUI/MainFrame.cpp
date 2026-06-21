@@ -52,6 +52,11 @@
 #include <string_view>
 
 #include "GUI_App.hpp"
+// >>> PRINTFARM
+#include "PrintFarm/PrintFarmManager.hpp"
+#include "PrintFarm/PrintFarmSettingsDialog.hpp"
+#include "PrintFarm/PrintFarmJobsDialog.hpp"
+// <<< PRINTFARM
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
@@ -3528,6 +3533,20 @@ void MainFrame::init_menubar_as_editor()
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
     m_menubar->Append(calib_menu,wxString::Format("&%s", _L("Calibration")));
+
+    // >>> PRINTFARM
+    {
+        wxMenu* farmMenu = new wxMenu();
+        append_menu_item(farmMenu, wxID_ANY, _L("Open Print Farm") + dots, _L("View synchronized printers and jobs"),
+            [](wxCommandEvent&) { Slic3r::GUI::PrintFarmJobsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+            "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, this);
+        append_menu_item(farmMenu, wxID_ANY, _L("Print Farm Settings") + dots, _L("Configure the Print Farm connection"),
+            [](wxCommandEvent&) { Slic3r::GUI::PrintFarmSettingsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+            "", nullptr, []() { return true; }, this);
+        m_menubar->Append(farmMenu, wxString::Format("&%s", _L("Print Farm")));
+    }
+    // <<< PRINTFARM
+
     if (helpMenu)
         m_menubar->Append(helpMenu, wxString::Format("&%s", _L("Help")));
     SetMenuBar(m_menubar);
