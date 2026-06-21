@@ -8,8 +8,9 @@
 //   * a cached printer list refreshed on login / on demand.
 //
 // A single instance lives for the app's lifetime; clear_session() (logout) and
-// app exit destroy all auth state. Nothing here is persisted to disk except the
-// non-secret config (and, only if the user opts in, the Print API Key).
+// app exit destroy all auth state. Only the non-secret config is written to the
+// AppConfig file; the Print API Key (if the user opts in) is kept in the OS
+// keychain, and the session token is never persisted anywhere.
 
 #include <memory>
 #include <mutex>

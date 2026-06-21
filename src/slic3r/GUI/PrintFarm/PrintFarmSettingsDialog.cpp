@@ -45,7 +45,7 @@ PrintFarmSettingsDialog::PrintFarmSettingsDialog(wxWindow* parent)
     m_api_key = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
     add_row(_L("Print API Key"), m_api_key);
 
-    m_remember_key = new wxCheckBox(this, wxID_ANY, _L("Remember API key on this computer"));
+    m_remember_key = new wxCheckBox(this, wxID_ANY, _L("Remember API key in the system keychain"));
     add_row(wxEmptyString, m_remember_key);
 
     m_refresh = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
