@@ -22,6 +22,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/Widgets/FilamentLoad.hpp
     GUI/AboutDialog.cpp
     GUI/AboutDialog.hpp
+    # >>> PRINTFARM
+    GUI/PrintFarm/PrintFarmManager.cpp
+    GUI/PrintFarm/PrintFarmManager.hpp
+    GUI/PrintFarm/PrintFarmLoginDialog.cpp
+    GUI/PrintFarm/PrintFarmLoginDialog.hpp
+    # <<< PRINTFARM
     GUI/AmsMappingPopup.cpp
     GUI/AmsMappingPopup.hpp
     GUI/AMSMaterialsSetting.cpp

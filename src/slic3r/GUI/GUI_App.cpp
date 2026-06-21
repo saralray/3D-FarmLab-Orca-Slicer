@@ -81,6 +81,10 @@
 #include "GUI_Utils.hpp"
 #include "3DScene.hpp"
 #include "MainFrame.hpp"
+// >>> PRINTFARM
+#include "PrintFarm/PrintFarmManager.hpp"
+#include "PrintFarm/PrintFarmLoginDialog.hpp"
+// <<< PRINTFARM
 #include "Plater.hpp"
 #include "GLCanvas3D.hpp"
 #include "EncodedFilament.hpp"
@@ -2476,6 +2480,11 @@ bool GUI_App::OnInit()
 
 int GUI_App::OnExit()
 {
+    // >>> PRINTFARM
+    // Destroy all Print Farm auth state on exit (session token is in-memory only).
+    PrintFarmManager::instance().clear_session();
+    // <<< PRINTFARM
+
     stop_http_server();
     stop_sync_user_preset();
 
@@ -3005,6 +3014,17 @@ bool GUI_App::on_init_inner()
         scrn->SetText(scrn_txt);
         wxYield();
     }
+    // >>> PRINTFARM
+    // When a Print Farm URL is configured, require a fresh login before the main
+    // UI appears. The session token is held in memory only (PrintFarmManager) and
+    // is never written to disk. If the user quits the gate, abort startup.
+    PrintFarmManager::instance().load_config(app_config);
+    if (!PrintFarmLoginDialog::run_login_gate(nullptr)) {
+        BOOST_LOG_TRIVIAL(info) << "[printfarm] login gate cancelled; aborting startup";
+        return false;
+    }
+    // <<< PRINTFARM
+
     BOOST_LOG_TRIVIAL(info) << "create the main window";
     mainframe = new MainFrame();
     // hide settings tabs after first Layout
