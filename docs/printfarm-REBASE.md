@@ -83,7 +83,10 @@ integration cannot regress stock behavior.
 - Session token is captured from the `pf_session` cookie and held **in memory
   only** — never written to `AppConfig`, disk, or keychain. Login is required on
   every launch; logout / app-exit clears it.
-- The Print API Key is separate from login and is persisted only if the user
-  opts into "Remember API key on this computer".
+- The Print API Key is separate from login. It is never written to the plaintext
+  config file: when the user opts in it is stored in the OS keychain via
+  `wxSecretStore` (service `OrcaSlicer/PrintFarm`); otherwise it stays in memory
+  for the session only. `PrintFarmManager::load_config` migrates any legacy
+  plaintext key from older builds into the keychain and strips it from the config.
 - Passwords and tokens are never logged. Structured logs use the `[printfarm]`
   prefix at appropriate levels.
