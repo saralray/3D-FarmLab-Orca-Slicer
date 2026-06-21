@@ -646,6 +646,11 @@ set(SLIC3R_GUI_SOURCES
     Utils/Obico.hpp
     Utils/OctoPrint.cpp
     Utils/OctoPrint.hpp
+    # >>> PRINTFARM
+    Utils/PrintFarm/PrintFarmClient.hpp
+    Utils/PrintFarm/RestPrintFarmClient.cpp
+    Utils/PrintFarm/RestPrintFarmClient.hpp
+    # <<< PRINTFARM
     Utils/PresetUpdater.cpp
     Utils/PresetUpdater.hpp
     Utils/PrintHost.cpp
