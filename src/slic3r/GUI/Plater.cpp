@@ -84,6 +84,10 @@
 #include "wxExtensions.hpp"
 #include "../Utils/PrintHost.hpp"
 #include "MainFrame.hpp"
+// >>> PRINTFARM
+#include "PrintFarm/PrintFarmManager.hpp"
+#include "PrintFarm/PrintFarmJobsDialog.hpp"
+// <<< PRINTFARM
 #include "format.hpp"
 #include "3DScene.hpp"
 #include "GLCanvas3D.hpp"
@@ -15033,6 +15037,58 @@ void Plater::export_gcode_3mf(bool export_all)
         p->notification_manager->push_exporting_finished_notification(output_path.string(), p->last_output_dir_path, on_removable);
     }
 }
+
+// >>> PRINTFARM
+// Export the current plate's sliced .gcode.3mf bundle to a temporary file and hand
+// it to the Print Farm upload flow. The backend forwards the file to the selected
+// printer; OrcaSlicer never talks to the printer directly. Nothing is written to a
+// user-chosen output location — this mirrors export_gcode_3mf() but stays silent.
+void Plater::export_to_farm()
+{
+    if (p->model.objects.empty()) {
+        show_error(this, _L("There is nothing to upload. Add and slice a model first."));
+        return;
+    }
+    if (p->process_completed_with_error == p->partplate_list.get_curr_plate_index()) {
+        show_error(this, _L("Slicing finished with an error; cannot upload to the farm."));
+        return;
+    }
+
+    fs::path default_output_file;
+    try {
+        unsigned int state = this->p->update_restart_background_process(false, false);
+        if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID)
+            return;
+        default_output_file = this->p->background_process.output_filepath_for_project(
+            into_path(this->p->get_project_filename(".3mf")));
+    }
+    catch (const std::exception& ex) {
+        show_error(this, ex.what(), false);
+        return;
+    }
+    default_output_file.replace_extension(".gcode.3mf");
+    default_output_file = fs::path(Slic3r::fold_utf8_to_ascii(default_output_file.string()));
+
+    fs::path tmp_path = fs::temp_directory_path() /
+        fs::unique_path("orca-farm-%%%%%%%%-" + default_output_file.filename().string());
+
+    int plate_idx = get_partplate_list().get_curr_plate_index();
+    int ret = export_3mf(tmp_path,
+                         SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode | SaveStrategy::SkipModel,
+                         plate_idx);
+
+    boost::system::error_code ec;
+    if (ret < 0 || !fs::exists(tmp_path, ec) || fs::file_size(tmp_path, ec) == 0) {
+        fs::remove(tmp_path, ec);
+        show_error(this, _L("Failed to export the sliced file for upload to the farm."));
+        return;
+    }
+
+    GUI::PrintFarmJobsDialog::upload_to_farm(this, tmp_path.string());
+
+    fs::remove(tmp_path, ec);
+}
+// <<< PRINTFARM
 
 void Plater::send_gcode_finish(wxString name)
 {

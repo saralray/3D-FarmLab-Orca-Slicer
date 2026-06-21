@@ -1957,6 +1957,10 @@ wxBoxSizer* MainFrame::create_side_tools()
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_TO_PRINTER));
             else if (m_print_select == eSendToPrinterAll)
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_TO_PRINTER_ALL));
+            // >>> PRINTFARM
+            else if (m_print_select == eUploadToFarm)
+                m_plater->export_to_farm();
+            // <<< PRINTFARM
             /* else if (m_print_select == ePrintMultiMachine)
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
@@ -2186,6 +2190,25 @@ wxBoxSizer* MainFrame::create_side_tools()
                 });
                 p->append_button(export_gcode_btn);
             }
+
+            // >>> PRINTFARM: upload the sliced result to the Print Farm backend.
+            // Offered only while logged in; routing goes through the backend, never
+            // directly to a printer. Existing Send/Print options are left untouched.
+            if (PrintFarmManager::instance().is_logged_in()) {
+                SideButton* upload_farm_btn = new SideButton(p, _L("Upload to Farm"), "");
+                upload_farm_btn->SetCornerRadius(0);
+                upload_farm_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+                    m_print_btn->SetLabel(_L("Upload to Farm"));
+                    m_print_select = eUploadToFarm;
+                    m_print_enable = get_enable_print_status();
+                    m_print_btn->Enable(m_print_enable);
+                    this->Layout();
+                    fit_tab_labels(); // ORCA on label change
+                    p->Dismiss();
+                });
+                p->append_button(upload_farm_btn);
+            }
+            // <<< PRINTFARM
 
             p->Popup(m_print_btn);
         }
@@ -3543,6 +3566,14 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(farmMenu, wxID_ANY, _L("Print Farm Settings") + dots, _L("Configure the Print Farm connection"),
             [](wxCommandEvent&) { Slic3r::GUI::PrintFarmSettingsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
             "", nullptr, []() { return true; }, this);
+        farmMenu->AppendSeparator();
+        append_menu_item(farmMenu, wxID_ANY, _L("Log Out"), _L("Sign out of the Print Farm and clear the in-memory session"),
+            [](wxCommandEvent&) {
+                Slic3r::GUI::PrintFarmManager::instance().logout();
+                wxMessageBox(_L("You have been signed out of the Print Farm. Restart to sign in again."),
+                             _L("Print Farm"), wxOK | wxICON_INFORMATION, wxGetApp().mainframe);
+            },
+            "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, this);
         m_menubar->Append(farmMenu, wxString::Format("&%s", _L("Print Farm")));
     }
     // <<< PRINTFARM

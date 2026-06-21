@@ -485,6 +485,9 @@ public:
     void send_to_printer(bool isall = false);
     void export_gcode(bool prefer_removable);
     void export_gcode_3mf(bool export_all = false);
+    // >>> PRINTFARM
+    void export_to_farm();
+    // <<< PRINTFARM
     void send_gcode_finish(wxString name);
     void export_core_3mf();
     static TriangleMesh combine_mesh_fff(const ModelObject& mo, int instance_id, std::function<void(const std::string&)> notify_func = {});

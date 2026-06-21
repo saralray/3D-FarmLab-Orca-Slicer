@@ -249,7 +249,10 @@ public:
         eSendToPrinterAll    = 6,
         eUploadGcode         = 7,
         eExportAllSlicedFile = 8,
-        ePrintMultiMachine   = 9
+        ePrintMultiMachine   = 9,
+        // >>> PRINTFARM
+        eUploadToFarm        = 10
+        // <<< PRINTFARM
     };
 
     void update_layout();
