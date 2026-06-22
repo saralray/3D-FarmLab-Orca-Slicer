@@ -253,6 +253,30 @@ std::vector<PfPrinter> PrintFarmManager::printers() const
     return m_printers;
 }
 
+void PrintFarmManager::set_upload_target(const std::string& printer_id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_upload_target_id = printer_id;
+}
+
+std::string PrintFarmManager::upload_target() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_upload_target_id;
+}
+
+bool PrintFarmManager::get_printer_by_id(const std::string& id, PfPrinter& out) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& p : m_printers) {
+        if (p.id == id) {
+            out = p;
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace GUI
 } // namespace Slic3r
 // <<< PRINTFARM

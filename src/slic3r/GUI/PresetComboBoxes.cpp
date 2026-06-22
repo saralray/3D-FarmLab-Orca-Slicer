@@ -33,6 +33,10 @@
 #include "MainFrame.hpp"
 #include "format.hpp"
 #include "Tab.hpp"
+// >>> PRINTFARM
+#include <cctype>
+#include "PrintFarm/PrintFarmManager.hpp"
+// <<< PRINTFARM
 #include "ConfigWizard.hpp"
 #include "../Utils/ASCIIFolding.hpp"
 #include "../Utils/UndoRedo.hpp"
@@ -505,6 +509,44 @@ int PresetComboBox::selected_connected_printer() const
     return -1;
 }
 
+// >>> PRINTFARM
+// List the backend-synced farm printers under a "Print Farm" header. These are
+// read-only selections (the user cannot add printers); selecting one switches to
+// the matching machine profile and marks it as the upload target — handled in
+// PlaterPresetComboBox::OnSelect.
+void PresetComboBox::add_farm_printers()
+{
+    m_first_farm_idx = 0;
+    m_last_farm_idx  = 0;
+    m_farm_ids.clear();
+
+    auto& mgr = Slic3r::GUI::PrintFarmManager::instance();
+    if (!mgr.is_logged_in())
+        return;
+    const auto printers = mgr.printers();
+    if (printers.empty())
+        return;
+
+    set_label_marker(Append(_L("Print Farm"), wxNullBitmap, DD_ITEM_STYLE_SPLIT_ITEM));
+    m_first_farm_idx = GetCount();
+    for (const auto& p : printers) {
+        const wxString label = from_u8(p.name) + " (" + _L("Farm") + ")";
+        Append(label, wxNullBitmap);
+        m_farm_ids.push_back(p.id);
+    }
+    m_last_farm_idx = GetCount();
+}
+
+int PresetComboBox::farm_printer_index_at(int item) const
+{
+    // Farm items are a contiguous block appended in order, so the index into
+    // m_farm_ids is simply the offset from the first farm item.
+    if (m_first_farm_idx && item >= m_first_farm_idx && item < m_last_farm_idx)
+        return item - m_first_farm_idx;
+    return -1;
+}
+// <<< PRINTFARM
+
 bool PresetComboBox::add_ams_filaments(std::string selected, bool alias_name)
 {
     bool selected_in_ams      = false;
@@ -936,6 +978,18 @@ void PlaterPresetComboBox::OnSelect(wxCommandEvent &evt)
 {
     auto selected_item = evt.GetSelection();
 
+    // >>> PRINTFARM: a farm printer was picked — set it as the upload target and
+    // switch to its matching machine profile (if installed). Do not let the farm
+    // label fall through to the normal preset-apply path.
+    int farm_idx = farm_printer_index_at(selected_item);
+    if (farm_idx >= 0) {
+        select_farm_printer(farm_idx);
+        return;
+    }
+    // A normal preset (or wizard) selection clears any farm-display override.
+    m_selected_farm_id.clear();
+    // <<< PRINTFARM
+
     auto marker = reinterpret_cast<Marker>(this->GetClientData(selected_item));
     if (marker >= LABEL_ITEM_DISABLED && marker < LABEL_ITEM_MAX) {
         this->SetSelection(m_last_selected);
@@ -967,6 +1021,72 @@ void PlaterPresetComboBox::OnSelect(wxCommandEvent &evt)
 
     evt.Skip();
 }
+
+// >>> PRINTFARM
+void PlaterPresetComboBox::select_farm_printer(int farm_idx)
+{
+    if (farm_idx < 0 || farm_idx >= (int) m_farm_ids.size()) {
+        this->SetSelection(m_last_selected);
+        return;
+    }
+    auto& mgr = Slic3r::GUI::PrintFarmManager::instance();
+    const std::string id = m_farm_ids[farm_idx];
+
+    Slic3r::PfPrinter farm;
+    if (!mgr.get_printer_by_id(id, farm)) {
+        this->SetSelection(m_last_selected);
+        return;
+    }
+
+    // Always record the chosen upload target, even if no local profile matches,
+    // and keep this farm printer shown as the selected item in the dropdown.
+    mgr.set_upload_target(id);
+    m_selected_farm_id = id;
+    const int farm_item = m_first_farm_idx + farm_idx;
+    m_last_selected = farm_item;
+
+    // Find an installed machine preset whose model matches the farm printer.
+    auto ieq = [](const std::string& a, const std::string& b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(),
+                          [](char x, char y) { return std::tolower((unsigned char) x) == std::tolower((unsigned char) y); });
+    };
+    std::string match;
+    for (const Preset& preset : m_collection->get_presets()) {
+        if (preset.is_default || !preset.is_visible)
+            continue;
+        const std::string model = preset.config.opt_string("printer_model");
+        if (!farm.model.empty() && ieq(model, farm.model)) {
+            match = preset.name;
+            if (preset.is_compatible)
+                break; // prefer a compatible match
+        }
+    }
+
+    if (match.empty()) {
+        this->SetSelection(farm_item); // keep the farm printer shown as selected
+        wxMessageBox(
+            wxString::Format(_L("Set \"%s\" as the Print Farm upload target.\n\n"
+                                "No matching printer profile (%s) is installed, so the active "
+                                "printer profile was kept. Install the matching profile to slice for it."),
+                             from_u8(farm.name), from_u8(farm.model)),
+            _L("Print Farm"), wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    // Switch to the matching machine profile through the normal preset path. The
+    // dropdown is re-pointed at the farm item in update() so it keeps showing the
+    // farm label while slicing uses the matched profile underneath.
+    BOOST_LOG_TRIVIAL(info) << "[printfarm] farm printer '" << farm.name << "' -> profile '" << match << "'";
+    if (Tab* tab = wxGetApp().get_tab(Preset::TYPE_PRINTER))
+        tab->select_preset(match);
+    this->CallAfter([this, id]() {
+        auto it = std::find(m_farm_ids.begin(), m_farm_ids.end(), id);
+        if (m_first_farm_idx && it != m_farm_ids.end())
+            this->SetSelection(m_first_farm_idx + (int) std::distance(m_farm_ids.begin(), it));
+    });
+}
+// <<< PRINTFARM
 
 void PlaterPresetComboBox::update_badge_according_flag() {
     auto selection   = GetSelection();
@@ -1453,6 +1573,11 @@ void PlaterPresetComboBox::update()
         }
     }*/
 
+    // >>> PRINTFARM: synced farm printers appear just before the wizard entries.
+    if (m_type == Preset::TYPE_PRINTER)
+        add_farm_printers();
+    // <<< PRINTFARM
+
     if (m_type == Preset::TYPE_PRINTER || m_type == Preset::TYPE_FILAMENT || m_type == Preset::TYPE_SLA_MATERIAL) {
         wxBitmap* bmp = get_bmp("edit_preset_list", wide_icons, "edit_uni");
         assert(bmp);
@@ -1468,6 +1593,14 @@ void PlaterPresetComboBox::update()
     }
 
     update_selection();
+    // >>> PRINTFARM: keep a chosen farm printer shown as the selected item even
+    // though the underlying machine profile is what drives slicing.
+    if (m_type == Preset::TYPE_PRINTER && !m_selected_farm_id.empty() && m_first_farm_idx) {
+        auto it = std::find(m_farm_ids.begin(), m_farm_ids.end(), m_selected_farm_id);
+        if (it != m_farm_ids.end())
+            this->SetSelection(m_first_farm_idx + (int) std::distance(m_farm_ids.begin(), it));
+    }
+    // <<< PRINTFARM
     if (m_type == Preset::TYPE_FILAMENT) {
         if (wxGetApp().plater()->is_same_printer_for_connected_and_selected(false)) {
             update_badge_according_flag();

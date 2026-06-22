@@ -205,10 +205,20 @@ bool PrintFarmJobsDialog::upload_to_farm(wxWindow* parent, const std::string& sl
         return false;
     }
 
-    const int sel = wxGetSingleChoiceIndex(_L("Select a printer to print on:"),
-                                           _L("Upload to Farm"), labels, parent);
-    if (sel < 0)
-        return false;
+    // If a target was already chosen (e.g. in the Prepare printer dropdown), upload
+    // to it directly without prompting; otherwise let the user pick one.
+    int sel = -1;
+    const std::string preselected = mgr.upload_target();
+    if (!preselected.empty()) {
+        for (size_t i = 0; i < targets.size(); ++i)
+            if (targets[i].id == preselected) { sel = (int) i; break; }
+    }
+    if (sel < 0) {
+        sel = wxGetSingleChoiceIndex(_L("Select a printer to print on:"),
+                                     _L("Upload to Farm"), labels, parent);
+        if (sel < 0)
+            return false;
+    }
 
     wxProgressDialog progress(_L("Uploading to Farm"), _L("Uploading sliced file…"), 100, parent,
                               wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH);

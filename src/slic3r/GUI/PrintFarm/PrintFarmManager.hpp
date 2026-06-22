@@ -53,6 +53,12 @@ public:
     PfResult                      refresh_printers();
     std::vector<PfPrinter>        printers() const;
 
+    // The farm printer chosen as the default upload target (e.g. picked in the
+    // Prepare printer dropdown). Empty when none is selected.
+    void                          set_upload_target(const std::string& printer_id);
+    std::string                   upload_target() const;
+    bool                          get_printer_by_id(const std::string& id, PfPrinter& out) const;
+
 private:
     PrintFarmManager() = default;
     void rebuild_client();
@@ -62,6 +68,7 @@ private:
     bool                              m_remember_api_key = false;
     std::unique_ptr<IPrintFarmClient> m_client;
     std::vector<PfPrinter>            m_printers;
+    std::string                       m_upload_target_id; // chosen default upload target
 };
 
 } // namespace GUI
