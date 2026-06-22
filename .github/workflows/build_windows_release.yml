@@ -1,0 +1,61 @@
+name: Build and Upload Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to upload to (e.g. v2.5.0-dev)'
+        required: true
+        default: 'v2.5.0-dev'
+
+jobs:
+  build_windows:
+    name: Build Windows Installer
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: 'false'
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Build deps and slicer
+        working-directory: ${{ github.workspace }}
+        run: .\build_release_vs2022.bat
+
+      - name: Create installer
+        working-directory: ${{ github.workspace }}/build
+        run: cpack -G NSIS
+
+      - name: Pack portable zip
+        working-directory: ${{ github.workspace }}/build
+        shell: cmd
+        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip OrcaSlicer_Windows_portable.zip "${{ github.workspace }}/build/OrcaSlicer"'
+
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          ver_pure=$(grep 'set(SoftFever_VERSION' version.inc | cut -d '"' -f2)
+          tag="${{ github.event.inputs.release_tag }}"
+          installer=$(ls ./build/OrcaSlicer*.exe | head -n1)
+          mv "$installer" "./build/3D-FarmLab-OrcaSlicer-${tag}-win64-installer.exe"
+          mv ./build/OrcaSlicer_Windows_portable.zip "./build/3D-FarmLab-OrcaSlicer-${tag}-win64-portable.zip"
+          echo "INSTALLER=./build/3D-FarmLab-OrcaSlicer-${tag}-win64-installer.exe" >> $GITHUB_ENV
+          echo "PORTABLE=./build/3D-FarmLab-OrcaSlicer-${tag}-win64-portable.zip" >> $GITHUB_ENV
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.inputs.release_tag }}" \
+            "${{ env.INSTALLER }}" \
+            "${{ env.PORTABLE }}" \
+            --repo "${{ github.repository }}" \
+            --clobber
