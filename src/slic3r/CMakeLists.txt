@@ -763,6 +763,16 @@ if (WIN32)
 else ()
     add_library(libslic3r_gui STATIC ${SLIC3R_GUI_SOURCES})
 endif ()
+
+# >>> DEV BUILD SPEED: compile the GUI library at -Og for faster edit/rebuild cycles.
+# Slicing performance lives in libslic3r (core), so this does NOT affect slice speed.
+# Configure with -DGUI_FAST_DEV=OFF to build the GUI fully optimized (-O2) for release.
+option(GUI_FAST_DEV "Compile libslic3r_gui at -Og for faster dev rebuilds" OFF)
+if (GUI_FAST_DEV AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(libslic3r_gui PRIVATE -Og)
+endif ()
+# <<< DEV BUILD SPEED
+
 target_include_directories(libslic3r_gui PRIVATE Utils ${CMAKE_CURRENT_BINARY_DIR})
 
 if (WIN32)
