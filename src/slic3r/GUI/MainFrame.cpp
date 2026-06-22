@@ -52,6 +52,12 @@
 #include <string_view>
 
 #include "GUI_App.hpp"
+// >>> PRINTFARM
+#include "PrintFarm/PrintFarmManager.hpp"
+#include "PrintFarm/PrintFarmSettingsDialog.hpp"
+#include "PrintFarm/PrintFarmJobsDialog.hpp"
+#include "PrintFarm/PrintFarmLoginPanel.hpp"
+// <<< PRINTFARM
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
@@ -1952,6 +1958,10 @@ wxBoxSizer* MainFrame::create_side_tools()
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_TO_PRINTER));
             else if (m_print_select == eSendToPrinterAll)
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_TO_PRINTER_ALL));
+            // >>> PRINTFARM
+            else if (m_print_select == eUploadToFarm)
+                m_plater->export_to_farm();
+            // <<< PRINTFARM
             /* else if (m_print_select == ePrintMultiMachine)
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
@@ -2181,6 +2191,25 @@ wxBoxSizer* MainFrame::create_side_tools()
                 });
                 p->append_button(export_gcode_btn);
             }
+
+            // >>> PRINTFARM: upload the sliced result to the Print Farm backend.
+            // Offered only while logged in; routing goes through the backend, never
+            // directly to a printer. Existing Send/Print options are left untouched.
+            if (PrintFarmManager::instance().is_logged_in()) {
+                SideButton* upload_farm_btn = new SideButton(p, _L("Upload to Farm"), "");
+                upload_farm_btn->SetCornerRadius(0);
+                upload_farm_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+                    m_print_btn->SetLabel(_L("Upload to Farm"));
+                    m_print_select = eUploadToFarm;
+                    m_print_enable = get_enable_print_status();
+                    m_print_btn->Enable(m_print_enable);
+                    this->Layout();
+                    fit_tab_labels(); // ORCA on label change
+                    p->Dismiss();
+                });
+                p->append_button(upload_farm_btn);
+            }
+            // <<< PRINTFARM
 
             p->Popup(m_print_btn);
         }
@@ -2667,6 +2696,70 @@ static void add_common_view_menu_items(wxMenu* view_menu, MainFrame* mainFrame, 
     append_menu_item(view_menu, wxID_ANY, _CTX(L_CONTEXT("Right", "Camera"), "Camera") + "\t" + ctrl + "6", _L("Right View"),[mainFrame](wxCommandEvent &) { mainFrame->select_view("right"); },
         "", nullptr, [can_change_view]() { return can_change_view(); }, mainFrame);
 }
+
+// >>> PRINTFARM
+// Build the "Print Farm" menu. Registered as a topbar dropdown on Windows/Linux
+// and on the native menu bar on macOS, so it is visible on every platform.
+static wxMenu* build_print_farm_menu(MainFrame* self)
+{
+    wxMenu* farmMenu = new wxMenu();
+    append_menu_item(farmMenu, wxID_ANY, _L("Open Print Farm") + dots, _L("View synchronized printers and jobs"),
+        [](wxCommandEvent&) { Slic3r::GUI::PrintFarmJobsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+        "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, self);
+    append_menu_item(farmMenu, wxID_ANY, _L("Print Farm Settings") + dots, _L("Configure the Print Farm connection"),
+        [](wxCommandEvent&) { Slic3r::GUI::PrintFarmSettingsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+        "", nullptr, []() { return true; }, self);
+    farmMenu->AppendSeparator();
+    append_menu_item(farmMenu, wxID_ANY, _L("Log Out"), _L("Sign out of the Print Farm and clear the in-memory session"),
+        [](wxCommandEvent&) {
+            Slic3r::GUI::PrintFarmManager::instance().logout();
+            wxMessageBox(_L("You have been signed out of the Print Farm. Restart to sign in again."),
+                         _L("Print Farm"), wxOK | wxICON_INFORMATION, wxGetApp().mainframe);
+        },
+        "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, self);
+    return farmMenu;
+}
+
+void MainFrame::show_print_farm_login()
+{
+    // The session lives in memory only, so the login overlay is shown on every
+    // launch. It is a full-window child panel (not a popup) that covers the UI
+    // until the user signs in or quits.
+    if (m_pf_login_overlay != nullptr || PrintFarmManager::instance().is_logged_in())
+        return;
+
+    auto* overlay = new PrintFarmLoginPanel(
+        this,
+        [this]() { // on success: reveal the app and surface the synced printers
+            if (m_pf_login_overlay) {
+                m_pf_login_overlay->Destroy();
+                m_pf_login_overlay = nullptr;
+            }
+            if (m_topbar)
+                m_topbar->Enable(true);
+            if (m_plater)
+                m_plater->sidebar().update_all_preset_comboboxes();
+        },
+        [this]() { Close(true); }); // on quit: exit the app
+
+    m_pf_login_overlay = overlay;
+    if (m_topbar)
+        m_topbar->Enable(false);
+    overlay->SetSize(GetClientSize());
+    overlay->Move(0, 0);
+    overlay->Raise();
+    overlay->SetFocus();
+
+    // Keep the overlay covering the whole client area as the window resizes.
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& e) {
+        if (m_pf_login_overlay) {
+            m_pf_login_overlay->SetSize(GetClientSize());
+            m_pf_login_overlay->Move(0, 0);
+        }
+        e.Skip();
+    });
+}
+// <<< PRINTFARM
 
 void MainFrame::init_menubar_as_editor()
 {
@@ -3322,6 +3415,10 @@ void MainFrame::init_menubar_as_editor()
     //m_topbar->AddDropDownMenuItem(config_item);
     m_topbar->AddDropDownSubMenu(helpMenu, _L("Help"));
 
+    // >>> PRINTFARM
+    m_topbar->AddDropDownSubMenu(build_print_farm_menu(this), _L("Print Farm"));
+    // <<< PRINTFARM
+
     // SoftFever calibrations
 
     // Temperature
@@ -3528,6 +3625,11 @@ void MainFrame::init_menubar_as_editor()
         [this]() {return m_plater->is_view3D_shown();; }, this);
 
     m_menubar->Append(calib_menu,wxString::Format("&%s", _L("Calibration")));
+
+    // >>> PRINTFARM
+    m_menubar->Append(build_print_farm_menu(this), wxString::Format("&%s", _L("Print Farm")));
+    // <<< PRINTFARM
+
     if (helpMenu)
         m_menubar->Append(helpMenu, wxString::Format("&%s", _L("Help")));
     SetMenuBar(m_menubar);

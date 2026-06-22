@@ -81,6 +81,10 @@
 #include "GUI_Utils.hpp"
 #include "3DScene.hpp"
 #include "MainFrame.hpp"
+// >>> PRINTFARM
+#include "PrintFarm/PrintFarmManager.hpp"
+#include "PrintFarm/PrintFarmLoginDialog.hpp"
+// <<< PRINTFARM
 #include "Plater.hpp"
 #include "GLCanvas3D.hpp"
 #include "EncodedFilament.hpp"
@@ -2476,6 +2480,11 @@ bool GUI_App::OnInit()
 
 int GUI_App::OnExit()
 {
+    // >>> PRINTFARM
+    // Destroy all Print Farm auth state on exit (session token is in-memory only).
+    PrintFarmManager::instance().clear_session();
+    // <<< PRINTFARM
+
     stop_http_server();
     stop_sync_user_preset();
 
@@ -3005,6 +3014,12 @@ bool GUI_App::on_init_inner()
         scrn->SetText(scrn_txt);
         wxYield();
     }
+    // >>> PRINTFARM
+    // Load the (non-secret) config; the in-window login overlay is shown after the
+    // main frame appears (see mainframe->show_print_farm_login() below).
+    PrintFarmManager::instance().load_config(app_config);
+    // <<< PRINTFARM
+
     BOOST_LOG_TRIVIAL(info) << "create the main window";
     mainframe = new MainFrame();
     // hide settings tabs after first Layout
@@ -3048,6 +3063,9 @@ bool GUI_App::on_init_inner()
     mainframe->Show(true);
     // Close the splash now that the main UI is visible.
     if (scrn) { scrn->Destroy(); scrn = nullptr; }
+    // >>> PRINTFARM: gate the app behind the in-window login overlay.
+    mainframe->show_print_farm_login();
+    // <<< PRINTFARM
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
 
 //#if BBL_HAS_FIRST_PAGE

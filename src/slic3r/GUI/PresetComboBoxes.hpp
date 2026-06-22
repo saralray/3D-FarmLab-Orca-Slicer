@@ -79,6 +79,12 @@ public:
     void add_connected_printers(std::string selected, bool alias_name = false);
     int  selected_connected_printer() const;
 
+    // >>> PRINTFARM: synced Print Farm printers listed in the printer dropdown.
+    void add_farm_printers();
+    // Index of the farm printer for a combo item, or -1 if it is not a farm item.
+    int  farm_printer_index_at(int item) const;
+    // <<< PRINTFARM
+
     // BBS: ams
     bool add_ams_filaments(std::string selected, bool alias_name = false);
     int  selected_ams_filament() const;
@@ -142,6 +148,13 @@ protected:
     // BBS: printer
     int m_first_printer_idx = 0;
     int m_last_printer_idx  = 0;
+
+    // >>> PRINTFARM
+    int                      m_first_farm_idx = 0;
+    int                      m_last_farm_idx  = 0;
+    std::vector<std::string> m_farm_ids;          // backend printer id per farm combo item
+    std::string              m_selected_farm_id;  // farm printer kept shown as selected, if any
+    // <<< PRINTFARM
 
     std::string              m_selected_dev_id;
 
@@ -214,6 +227,11 @@ public:
 private:
     // BBS
     wxColor m_color;
+
+    // >>> PRINTFARM: apply a farm-printer selection (switch machine profile +
+    // mark it as the upload target). farm_idx indexes m_farm_ids.
+    void select_farm_printer(int farm_idx);
+    // <<< PRINTFARM
 };
 
 
