@@ -1,0 +1,45 @@
+name: Build and Upload Linux Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to upload to (e.g. v2.5.0-dev)'
+        required: true
+        default: 'v2.5.0-dev'
+
+jobs:
+  build_linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: 'false'
+
+      - name: Install system dependencies
+        run: |
+          sudo ./build_linux.sh -ur
+
+      - name: Build deps, slicer and AppImage
+        run: |
+          ./build_linux.sh -dsri
+
+      - name: Rename AppImage
+        run: |
+          ver_pure=$(grep 'set(SoftFever_VERSION' version.inc | cut -d '"' -f2)
+          src="./build/OrcaSlicer_Linux_V${ver_pure}.AppImage"
+          dst="./build/3D-FarmLab-OrcaSlicer-${{ github.event.inputs.release_tag }}-linux-x86_64.AppImage"
+          mv "$src" "$dst"
+          echo "APPIMAGE=$dst" >> $GITHUB_ENV
+
+      - name: Upload AppImage to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.inputs.release_tag }}" \
+            "${{ env.APPIMAGE }}#3D-FarmLab-OrcaSlicer-${{ github.event.inputs.release_tag }}-linux-x86_64.AppImage" \
+            --repo "${{ github.repository }}" \
+            --clobber
