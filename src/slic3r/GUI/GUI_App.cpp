@@ -3015,9 +3015,10 @@ bool GUI_App::on_init_inner()
         wxYield();
     }
     // >>> PRINTFARM
-    // When a Print Farm URL is configured, require a fresh login before the main
-    // UI appears. The session token is held in memory only (PrintFarmManager) and
-    // is never written to disk. If the user quits the gate, abort startup.
+    // Require a fresh login on every launch before the main UI appears. On first
+    // run (no URL configured) the gate also collects the server URL. The session
+    // token is held in memory only (PrintFarmManager) and is never written to
+    // disk. If the user quits the gate, abort startup.
     PrintFarmManager::instance().load_config(app_config);
     if (!PrintFarmLoginDialog::run_login_gate(nullptr)) {
         BOOST_LOG_TRIVIAL(info) << "[printfarm] login gate cancelled; aborting startup";
