@@ -55,15 +55,14 @@ PrintFarmLoginPanel::PrintFarmLoginPanel(wxWindow*             parent,
     auto* grid = new wxFlexGridSizer(2, FromDIP(8), FromDIP(8));
     grid->AddGrowableCol(1, 1);
 
-    if (!configured) {
-        grid->Add(make_label(_L("Server URL")), 0, wxALIGN_CENTER_VERTICAL);
-        m_server_url = new wxTextCtrl(card, wxID_ANY, wxString::FromUTF8(PF_DEFAULT_URL),
-                                      wxDefaultPosition, wxSize(FromDIP(300), -1));
-        grid->Add(m_server_url, 1, wxEXPAND);
-    } else {
-        grid->Add(make_label(_L("Server")), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(make_label(wxString::FromUTF8(mgr.config().url)), 1, wxALIGN_CENTER_VERTICAL);
-    }
+    // The server URL is always editable here so it can be corrected/changed even
+    // after it has been configured (e.g. the backend moved) without needing to be
+    // signed in to reach Settings.
+    grid->Add(make_label(_L("Server URL")), 0, wxALIGN_CENTER_VERTICAL);
+    m_server_url = new wxTextCtrl(card, wxID_ANY,
+                                  wxString::FromUTF8(configured ? mgr.config().url : PF_DEFAULT_URL),
+                                  wxDefaultPosition, wxSize(FromDIP(300), -1));
+    grid->Add(m_server_url, 1, wxEXPAND);
 
     grid->Add(make_label(_L("Email")), 0, wxALIGN_CENTER_VERTICAL);
     m_email = new wxTextCtrl(card, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(300), -1));
