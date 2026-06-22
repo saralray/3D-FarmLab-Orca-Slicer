@@ -8,6 +8,11 @@ on:
         required: true
         default: 'v2.5.0-dev'
 
+# Allow the default GITHUB_TOKEN to upload assets to releases (otherwise the
+# upload step fails with HTTP 403 "Resource not accessible by integration").
+permissions:
+  contents: write
+
 jobs:
   build_windows:
     name: Build Windows Installer
