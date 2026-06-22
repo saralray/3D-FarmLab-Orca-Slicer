@@ -34,6 +34,9 @@ public:
     PfResult get_job(const std::string& id, PfJob& out) override;
     PfResult cancel_job(const std::string& id) override;
 
+    PfResult mint_upload_token() override;
+    PfResult revoke_upload_token() override;
+
     PfResult upload_job(const std::string& printer_id,
                         const std::string& file_path,
                         const ProgressFn&  on_progress,
@@ -53,8 +56,9 @@ private:
 
     mutable std::mutex m_mutex;
     PrintFarmConfig    m_cfg;
-    std::string        m_session_cookie; // pf_session value, in-memory only
+    std::string        m_session_cookie;     // pf_session value, in-memory only
     PfUser             m_user;
+    bool               m_minted_token = false; // true if api_key was auto-minted this session
 };
 
 } // namespace Slic3r

@@ -411,6 +411,67 @@ PfResult RestPrintFarmClient::cancel_job(const std::string& id)
     return result;
 }
 
+PfResult RestPrintFarmClient::mint_upload_token()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_session_cookie.empty())
+        return PfResult::failure("Not signed in.", 401);
+
+    PfResult    result = PfResult::failure("Failed to obtain an upload token.");
+    std::string resp;
+    auto http = Http::post(api_url("/api/auth/slicer-token"));
+    apply_tls(http);
+    apply_session(http);
+    http.header("Content-Type", "application/json")
+        .set_post_body(std::string("{}"))
+        .timeout_max(20)
+        .on_complete([&](std::string b, unsigned status) { resp = std::move(b); result = PfResult::success(status); })
+        .on_error([&](std::string b, std::string error, unsigned status) {
+            result = PfResult::failure(http_error_message(b, error, status), status);
+        })
+        .perform_sync();
+    if (!result.ok)
+        return result;
+
+    try {
+        auto j = json::parse(resp);
+        const std::string key = j.value("key", std::string{});
+        if (key.empty())
+            return PfResult::failure("Server did not return an upload token.");
+        m_cfg.api_key  = key;   // in-memory only; never persisted
+        m_minted_token = true;
+    } catch (const std::exception& e) {
+        return PfResult::failure(std::string("Could not parse upload token: ") + e.what());
+    }
+    PF_LOG(info) << "minted ephemeral upload token";
+    return result;
+}
+
+PfResult RestPrintFarmClient::revoke_upload_token()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Only revoke a token we minted; never touch a manually-configured key.
+    if (!m_minted_token)
+        return PfResult::success();
+
+    PfResult result = PfResult::failure("Failed to revoke upload token.");
+    if (!m_session_cookie.empty()) {
+        auto http = Http::del(api_url("/api/auth/slicer-token"));
+        apply_tls(http);
+        apply_session(http);
+        http.timeout_max(10)
+            .on_complete([&](std::string, unsigned status) { result = PfResult::success(status); })
+            .on_error([&](std::string b, std::string error, unsigned status) {
+                result = PfResult::failure(http_error_message(b, error, status), status);
+            })
+            .perform_sync();
+    }
+    m_cfg.api_key.clear();
+    m_minted_token = false;
+    PF_LOG(info) << "revoked ephemeral upload token";
+    return result;
+}
+
 PfResult RestPrintFarmClient::upload_job(const std::string& printer_id,
                                          const std::string& file_path,
                                          const ProgressFn&  on_progress,

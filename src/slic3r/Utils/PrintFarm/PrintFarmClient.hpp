@@ -106,6 +106,15 @@ public:
     // Cancel/remove a queued job (DELETE /api/queue/{id}).
     virtual PfResult cancel_job(const std::string& id) = 0;
 
+    // ---- Ephemeral upload token (session credential) ----
+    // Mint a short-lived slicer-upload API key bound to the current session and
+    // adopt it as the in-memory Print API Key (never persisted). Called right
+    // after login so the user never has to create or paste a key.
+    virtual PfResult mint_upload_token() = 0;
+    // Revoke the ephemeral token on the backend and drop it from memory. Called
+    // on logout / app exit. Best-effort; safe to call when none was minted.
+    virtual PfResult revoke_upload_token() = 0;
+
     // ---- Print actions (Print API Key credential) ----
     // Multipart upload of a sliced file to the slicer-proxy; backend creates/starts the print.
     virtual PfResult upload_job(const std::string& printer_id,

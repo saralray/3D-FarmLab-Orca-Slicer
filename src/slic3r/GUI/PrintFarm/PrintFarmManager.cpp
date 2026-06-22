@@ -128,7 +128,8 @@ void PrintFarmManager::save_config(AppConfig* cfg) const
 
     cfg->set(PF_SECTION, "url", m_config.url);
     cfg->set(PF_SECTION, "slicer_proxy_url", m_config.slicer_proxy_url);
-    cfg->set(PF_SECTION, "auth_mode", auth_mode_to_string(m_config.auth_mode));
+    // Wrap in std::string: a bare const char* would bind to AppConfig::set(...,bool).
+    cfg->set(PF_SECTION, "auth_mode", std::string(auth_mode_to_string(m_config.auth_mode)));
     cfg->set(PF_SECTION, "refresh_interval", std::to_string(m_config.refresh_interval_s));
     cfg->set(PF_SECTION, "allow_insecure_tls", m_config.allow_insecure_tls);
     cfg->set(PF_SECTION, "remember_api_key", m_remember_api_key);
@@ -170,24 +171,48 @@ PfResult PrintFarmManager::login(const std::string& email, const std::string& pa
 
     PfUser user;
     PfResult res = client->login(email, password, user);
-    if (res.ok)
+    if (res.ok) {
         BOOST_LOG_TRIVIAL(info) << "[printfarm] manager: user logged in";
+        // Load the printer list immediately after login (spec: sync on startup).
+        // Best-effort: a sync failure must not invalidate a successful login.
+        PfResult sync = refresh_printers();
+        BOOST_LOG_TRIVIAL(info) << "[printfarm] manager: initial printer sync "
+                                << (sync.ok ? "ok" : "failed: " + sync.error);
+
+        // Auto-mint an ephemeral upload token unless the user configured a manual
+        // Print API Key. The token lives in client memory only and is revoked on
+        // logout / app exit. Best-effort: upload can still be configured manually.
+        bool has_manual_key;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            has_manual_key = !m_config.api_key.empty();
+        }
+        if (!has_manual_key) {
+            PfResult tok = client->mint_upload_token();
+            BOOST_LOG_TRIVIAL(info) << "[printfarm] manager: upload token "
+                                    << (tok.ok ? "minted" : "mint failed: " + tok.error);
+        }
+    }
     return res;
 }
 
 void PrintFarmManager::logout()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_client)
+    if (m_client) {
+        m_client->revoke_upload_token(); // delete the ephemeral token on the backend
         m_client->logout();
+    }
     m_printers.clear();
 }
 
 void PrintFarmManager::clear_session()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_client)
+    if (m_client) {
+        m_client->revoke_upload_token(); // delete the ephemeral token on the backend
         m_client->logout();
+    }
     m_printers.clear();
 }
 
