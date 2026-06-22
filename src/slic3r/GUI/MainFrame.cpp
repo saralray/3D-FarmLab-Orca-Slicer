@@ -2696,6 +2696,30 @@ static void add_common_view_menu_items(wxMenu* view_menu, MainFrame* mainFrame, 
         "", nullptr, [can_change_view]() { return can_change_view(); }, mainFrame);
 }
 
+// >>> PRINTFARM
+// Build the "Print Farm" menu. Registered as a topbar dropdown on Windows/Linux
+// and on the native menu bar on macOS, so it is visible on every platform.
+static wxMenu* build_print_farm_menu(MainFrame* self)
+{
+    wxMenu* farmMenu = new wxMenu();
+    append_menu_item(farmMenu, wxID_ANY, _L("Open Print Farm") + dots, _L("View synchronized printers and jobs"),
+        [](wxCommandEvent&) { Slic3r::GUI::PrintFarmJobsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+        "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, self);
+    append_menu_item(farmMenu, wxID_ANY, _L("Print Farm Settings") + dots, _L("Configure the Print Farm connection"),
+        [](wxCommandEvent&) { Slic3r::GUI::PrintFarmSettingsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
+        "", nullptr, []() { return true; }, self);
+    farmMenu->AppendSeparator();
+    append_menu_item(farmMenu, wxID_ANY, _L("Log Out"), _L("Sign out of the Print Farm and clear the in-memory session"),
+        [](wxCommandEvent&) {
+            Slic3r::GUI::PrintFarmManager::instance().logout();
+            wxMessageBox(_L("You have been signed out of the Print Farm. Restart to sign in again."),
+                         _L("Print Farm"), wxOK | wxICON_INFORMATION, wxGetApp().mainframe);
+        },
+        "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, self);
+    return farmMenu;
+}
+// <<< PRINTFARM
+
 void MainFrame::init_menubar_as_editor()
 {
 #ifdef __APPLE__
@@ -3350,6 +3374,10 @@ void MainFrame::init_menubar_as_editor()
     //m_topbar->AddDropDownMenuItem(config_item);
     m_topbar->AddDropDownSubMenu(helpMenu, _L("Help"));
 
+    // >>> PRINTFARM
+    m_topbar->AddDropDownSubMenu(build_print_farm_menu(this), _L("Print Farm"));
+    // <<< PRINTFARM
+
     // SoftFever calibrations
 
     // Temperature
@@ -3558,24 +3586,7 @@ void MainFrame::init_menubar_as_editor()
     m_menubar->Append(calib_menu,wxString::Format("&%s", _L("Calibration")));
 
     // >>> PRINTFARM
-    {
-        wxMenu* farmMenu = new wxMenu();
-        append_menu_item(farmMenu, wxID_ANY, _L("Open Print Farm") + dots, _L("View synchronized printers and jobs"),
-            [](wxCommandEvent&) { Slic3r::GUI::PrintFarmJobsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
-            "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, this);
-        append_menu_item(farmMenu, wxID_ANY, _L("Print Farm Settings") + dots, _L("Configure the Print Farm connection"),
-            [](wxCommandEvent&) { Slic3r::GUI::PrintFarmSettingsDialog dlg(wxGetApp().mainframe); dlg.ShowModal(); },
-            "", nullptr, []() { return true; }, this);
-        farmMenu->AppendSeparator();
-        append_menu_item(farmMenu, wxID_ANY, _L("Log Out"), _L("Sign out of the Print Farm and clear the in-memory session"),
-            [](wxCommandEvent&) {
-                Slic3r::GUI::PrintFarmManager::instance().logout();
-                wxMessageBox(_L("You have been signed out of the Print Farm. Restart to sign in again."),
-                             _L("Print Farm"), wxOK | wxICON_INFORMATION, wxGetApp().mainframe);
-            },
-            "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, this);
-        m_menubar->Append(farmMenu, wxString::Format("&%s", _L("Print Farm")));
-    }
+    m_menubar->Append(build_print_farm_menu(this), wxString::Format("&%s", _L("Print Farm")));
     // <<< PRINTFARM
 
     if (helpMenu)
