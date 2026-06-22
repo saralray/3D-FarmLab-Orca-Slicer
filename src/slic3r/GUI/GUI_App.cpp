@@ -3015,15 +3015,9 @@ bool GUI_App::on_init_inner()
         wxYield();
     }
     // >>> PRINTFARM
-    // Require a fresh login on every launch before the main UI appears. On first
-    // run (no URL configured) the gate also collects the server URL. The session
-    // token is held in memory only (PrintFarmManager) and is never written to
-    // disk. If the user quits the gate, abort startup.
+    // Load the (non-secret) config; the in-window login overlay is shown after the
+    // main frame appears (see mainframe->show_print_farm_login() below).
     PrintFarmManager::instance().load_config(app_config);
-    if (!PrintFarmLoginDialog::run_login_gate(nullptr)) {
-        BOOST_LOG_TRIVIAL(info) << "[printfarm] login gate cancelled; aborting startup";
-        return false;
-    }
     // <<< PRINTFARM
 
     BOOST_LOG_TRIVIAL(info) << "create the main window";
@@ -3069,6 +3063,9 @@ bool GUI_App::on_init_inner()
     mainframe->Show(true);
     // Close the splash now that the main UI is visible.
     if (scrn) { scrn->Destroy(); scrn = nullptr; }
+    // >>> PRINTFARM: gate the app behind the in-window login overlay.
+    mainframe->show_print_farm_login();
+    // <<< PRINTFARM
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
 
 //#if BBL_HAS_FIRST_PAGE

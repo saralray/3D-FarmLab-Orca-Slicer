@@ -56,6 +56,7 @@
 #include "PrintFarm/PrintFarmManager.hpp"
 #include "PrintFarm/PrintFarmSettingsDialog.hpp"
 #include "PrintFarm/PrintFarmJobsDialog.hpp"
+#include "PrintFarm/PrintFarmLoginPanel.hpp"
 // <<< PRINTFARM
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
@@ -2717,6 +2718,46 @@ static wxMenu* build_print_farm_menu(MainFrame* self)
         },
         "", nullptr, []() { return Slic3r::GUI::PrintFarmManager::instance().is_logged_in(); }, self);
     return farmMenu;
+}
+
+void MainFrame::show_print_farm_login()
+{
+    // The session lives in memory only, so the login overlay is shown on every
+    // launch. It is a full-window child panel (not a popup) that covers the UI
+    // until the user signs in or quits.
+    if (m_pf_login_overlay != nullptr || PrintFarmManager::instance().is_logged_in())
+        return;
+
+    auto* overlay = new PrintFarmLoginPanel(
+        this,
+        [this]() { // on success: reveal the app and surface the synced printers
+            if (m_pf_login_overlay) {
+                m_pf_login_overlay->Destroy();
+                m_pf_login_overlay = nullptr;
+            }
+            if (m_topbar)
+                m_topbar->Enable(true);
+            if (m_plater)
+                m_plater->sidebar().update_all_preset_comboboxes();
+        },
+        [this]() { Close(true); }); // on quit: exit the app
+
+    m_pf_login_overlay = overlay;
+    if (m_topbar)
+        m_topbar->Enable(false);
+    overlay->SetSize(GetClientSize());
+    overlay->Move(0, 0);
+    overlay->Raise();
+    overlay->SetFocus();
+
+    // Keep the overlay covering the whole client area as the window resizes.
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& e) {
+        if (m_pf_login_overlay) {
+            m_pf_login_overlay->SetSize(GetClientSize());
+            m_pf_login_overlay->Move(0, 0);
+        }
+        e.Skip();
+    });
 }
 // <<< PRINTFARM
 

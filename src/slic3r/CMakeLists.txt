@@ -27,6 +27,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PrintFarm/PrintFarmManager.hpp
     GUI/PrintFarm/PrintFarmLoginDialog.cpp
     GUI/PrintFarm/PrintFarmLoginDialog.hpp
+    GUI/PrintFarm/PrintFarmLoginPanel.cpp
+    GUI/PrintFarm/PrintFarmLoginPanel.hpp
     GUI/PrintFarm/PrintFarmSettingsDialog.cpp
     GUI/PrintFarm/PrintFarmSettingsDialog.hpp
     GUI/PrintFarm/PrintFarmJobsDialog.cpp

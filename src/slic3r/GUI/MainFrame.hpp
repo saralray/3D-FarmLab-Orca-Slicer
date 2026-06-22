@@ -214,6 +214,12 @@ public:
 #ifdef __APPLE__
     bool get_mac_full_screen() { return m_mac_fullscreen; }
 #endif
+    // >>> PRINTFARM: show the in-window Print Farm login overlay (gates the app).
+    void show_print_farm_login();
+private:
+    wxWindow* m_pf_login_overlay = nullptr;
+public:
+    // <<< PRINTFARM
     //BBS GUI refactor
     enum TabPosition
     {
