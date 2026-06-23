@@ -25,14 +25,37 @@ jobs:
           lfs: 'false'
 
       - name: Setup MSVC
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       - name: Install NSIS
         run: choco install nsis -y
 
-      - name: Build deps and slicer
+      # Cache the dependency build under a release-owned key (NOT the shared main-CI
+      # key): OpenCV's installed OpenCVConfig picks its vcNN runtime by the MSVC that
+      # BUILT it, so a cache built by a runner with a different MSVC fails config with
+      # "OpenCV ... no binaries compatible" (resolves vc14). Building deps here ties
+      # the cache to this workflow's own runner toolchain; a cache miss just rebuilds
+      # deps fresh (same as the original full build) and re-saves.
+      #
+      # Key hashes only the dependency DEFINITION files (manifests + per-package
+      # recipes), NOT 'deps/**': the post-job cache-save re-evaluates this key after
+      # deps/build is populated (~187k artifact files), and hashFiles('deps/**') over
+      # that times out (>120s), failing the job even though the build succeeded.
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-release-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/deps-*.cmake', 'deps/*/*.cmake') }}
+
+      - name: Build dependencies (cache miss only)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         working-directory: ${{ github.workspace }}
-        run: .\build_release_vs2022.bat
+        run: .\build_release_vs.bat deps
+
+      - name: Build slicer
+        working-directory: ${{ github.workspace }}
+        run: .\build_release_vs.bat slicer
 
       - name: Create installer
         working-directory: ${{ github.workspace }}/build
