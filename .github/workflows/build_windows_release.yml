@@ -30,9 +30,23 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y
 
-      - name: Build deps and slicer
+      # Reuse the dependency build cached by the main "Build all" CI (same key/path),
+      # so deps (~1h) are restored instead of rebuilt. Same VS toolchain, no change needed.
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+
+      - name: Build dependencies (cache miss only)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         working-directory: ${{ github.workspace }}
-        run: .\build_release_vs2022.bat
+        run: .\build_release_vs2022.bat deps
+
+      - name: Build slicer
+        working-directory: ${{ github.workspace }}
+        run: .\build_release_vs2022.bat slicer
 
       - name: Create installer
         working-directory: ${{ github.workspace }}/build

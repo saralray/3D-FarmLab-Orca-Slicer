@@ -28,9 +28,24 @@ jobs:
         run: |
           sudo ./build_linux.sh -ur
 
-      - name: Build deps, slicer and AppImage
+      # Reuse the dependency build cached by the main "Build all" CI (same key/path),
+      # so deps (~1h) are restored instead of rebuilt. Uses the clang key, hence the
+      # clang+lld build below (matches upstream nightlies and the cached deps' toolchain).
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: linux-clang-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+
+      - name: Build dependencies (cache miss only)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
-          ./build_linux.sh -dsri
+          ./build_linux.sh -drlL
+
+      - name: Build slicer and AppImage
+        run: |
+          ./build_linux.sh -isrlL
 
       - name: Rename AppImage
         run: |
