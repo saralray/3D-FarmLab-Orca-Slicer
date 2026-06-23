@@ -56,7 +56,12 @@ void TextInput::Create(wxWindow *     parent,
     StaticBox::Create(parent, wxID_ANY, pos, size, style);
     wxWindow::SetLabel(label);
     assert((style & wxRIGHT) == 0);
+    // wxTE_PASSWORD shares its bit (0x0800) with wxALIGN_CENTER_VERTICAL, which is
+    // part of wxALIGN_MASK. Stripping alignment below would silently drop password
+    // mode, so capture it first and restore it for the inner text control.
+    const long keep_password = style & wxTE_PASSWORD;
     style &= ~wxALIGN_MASK;
+    style |= keep_password;
     state_handler.attach({&label_color, & text_color});
     state_handler.update_binds();
     text_ctrl = new TextCtrl(this, wxID_ANY, text, {4, 4}, wxDefaultSize, style | wxBORDER_NONE | wxTE_PROCESS_ENTER);
