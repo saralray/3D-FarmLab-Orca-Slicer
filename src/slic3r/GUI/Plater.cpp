@@ -3501,13 +3501,153 @@ void Sidebar::load_ams_list(MachineObject* obj)
     p->combo_printer->update();
 }
 
+bool Sidebar::sync_ams_list_from_farm()
+{
+    auto& mgr = Slic3r::GUI::PrintFarmManager::instance();
+    if (!mgr.is_logged_in() || mgr.upload_target().empty())
+        return false; // not a farm context — let the caller keep prior behavior
+
+    const std::string target_id = mgr.upload_target();
+
+    // Pull the freshest spool loadout for the target printer; fall back to the
+    // cached printer record if the live fetch fails.
+    wxBusyCursor cursor;
+    Slic3r::PfPrinter farm;
+    bool have = false;
+    if (auto* client = mgr.client())
+        have = client->get_printer(target_id, farm).ok;
+    if (!have)
+        have = mgr.get_printer_by_id(target_id, farm);
+    if (!have) {
+        MessageDialog dlg(this, _L("Could not reach the Print Farm to read the printer's filaments."),
+                          _L("Sync filaments with AMS"), wxOK);
+        dlg.ShowModal();
+        return true;
+    }
+    if (farm.spools.empty()) {
+        MessageDialog dlg(this, _L("The selected Print Farm printer is not reporting any loaded filaments."),
+                          _L("Sync filaments with AMS"), wxOK);
+        dlg.ShowModal();
+        return true;
+    }
+
+    // Build the same filament_ams_list structure the AMS path produces, so the
+    // shared matching engine (PresetBundle::sync_ams_list) resolves each lane to a
+    // full filament preset by type + colour. The farm has no Bambu setting_id, so
+    // filament_id is set to a non-empty sentinel that never resolves directly and
+    // therefore falls through to the "Generic <type>" matching path.
+    std::map<int, DynamicPrintConfig> filament_ams_list;
+    int idx = 0;
+    for (const auto& spool : farm.spools) {
+        DynamicPrintConfig cfg;
+        cfg.set_key_value("filament_id", new ConfigOptionStrings{std::string("farm")});
+        cfg.set_key_value("tag_uid", new ConfigOptionStrings{std::string()});
+        cfg.set_key_value("ams_id", new ConfigOptionStrings{std::to_string(idx)});
+        cfg.set_key_value("slot_id", new ConfigOptionStrings{std::string("0")});
+        cfg.set_key_value("filament_type", new ConfigOptionStrings{spool.material});
+        cfg.set_key_value("tray_name", new ConfigOptionStrings{spool.id.empty() ? std::to_string(idx + 1) : spool.id});
+        wxColour    col(from_u8(spool.color));
+        std::string colour_html = col.IsOk() ? into_u8(col.GetAsString(wxC2S_HTML_SYNTAX)) : std::string("#CECECE");
+        cfg.set_key_value("filament_colour", new ConfigOptionStrings{colour_html});
+        cfg.set_key_value("filament_multi_colour", new ConfigOptionStrings{});
+        cfg.set_key_value("filament_colour_type", new ConfigOptionStrings{std::string("0")});
+        cfg.set_key_value("filament_exist", new ConfigOptionBools{true});
+        cfg.set_key_value("filament_slot_placeholder", new ConfigOptionBools{false});
+        cfg.set_key_value("filament_is_support", new ConfigOptionBools{false});
+        filament_ams_list.emplace(idx, std::move(cfg));
+        ++idx;
+    }
+    wxGetApp().preset_bundle->filament_ams_list = filament_ams_list;
+    for (auto c : p->combos_filament)
+        c->update();
+
+    // Record colours/support state before sync to drive flush-volume recompute.
+    std::vector<std::string> color_before_sync;
+    std::vector<bool>        is_support_before;
+    DynamicPrintConfig&  project_config = wxGetApp().preset_bundle->project_config;
+    ConfigOptionStrings* color_opt      = project_config.option<ConfigOptionStrings>("filament_colour");
+    for (int i = 0; i < (int) p->combos_filament.size(); ++i) {
+        is_support_before.push_back(is_support_filament(i));
+        color_before_sync.push_back(color_opt->values[i]);
+    }
+
+    MergeFilamentInfo                                        merge_info;
+    std::vector<std::pair<DynamicPrintConfig*, std::string>> unknowns;
+    std::map<int, AMSMapInfo>                                maps;
+    auto enable_append   = wxGetApp().app_config->get_bool("enable_append_color_by_sync_ams");
+    auto sync_color_only = wxGetApp().app_config->get("sync_ams_filament_mode") == "1";
+    auto n               = wxGetApp().preset_bundle->sync_ams_list(unknowns, false, maps, enable_append, merge_info, sync_color_only);
+
+    wxString detail;
+    for (auto& uk : unknowns) {
+        auto tray_name     = uk.first->opt_string("tray_name", 0u);
+        auto filament_type = uk.first->opt_string("filament_type", 0u);
+        detail += from_u8("\n- " + tray_name + "(" + filament_type + ") ") + _L(uk.second);
+    }
+    if (n == 0) {
+        MessageDialog dlg(this, _L("There are no compatible filaments, and sync is not performed.") + detail,
+                          _L("Sync filaments with AMS"), wxOK);
+        dlg.ShowModal();
+        return true;
+    }
+
+    // Apply / refresh, mirroring the AMS path's tail.
+    if (!sync_color_only)
+        wxGetApp().plater()->on_filament_count_change(n);
+    for (auto& c : p->combos_filament)
+        c->update();
+    update_filaments_area_height();
+    for (int i = 0; i < (int) p->combos_filament.size(); ++i) {
+        if (i >= (int) color_before_sync.size())
+            auto_calc_flushing_volumes(i);
+        else if (color_before_sync[i] != color_opt->values[i] && wxGetApp().app_config->get("auto_calculate_flush") != "disabled")
+            auto_calc_flushing_volumes(i);
+        else if (is_support_filament(i) != is_support_before[i] && wxGetApp().app_config->get("auto_calculate_flush") == "all")
+            auto_calc_flushing_volumes(i);
+    }
+    Layout();
+    if (!sync_color_only) {
+        wxGetApp().get_tab(Preset::TYPE_FILAMENT)->select_preset(wxGetApp().preset_bundle->filament_presets[0]);
+        wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
+        update_dynamic_filament_list();
+    } else {
+        wxGetApp().plater()->update_filament_colors_in_full_config();
+        for (auto& c : p->combos_filament)
+            c->update();
+        obj_list()->update_filament_colors();
+        update_dynamic_filament_list();
+    }
+
+    // Badge the synced filament combos (type + colour synced, no slot info).
+    clear_combos_filament_badge();
+    for (size_t tray_idx = 0; tray_idx < p->combos_filament.size() && tray_idx < filament_ams_list.size(); ++tray_idx) {
+        p->combos_filament[tray_idx]->SetToolTip(
+            _L("Filament type and color information have been synchronized, but slot information is not included."));
+        p->combos_filament[tray_idx]->ShowBadge(true);
+    }
+
+    if (!unknowns.empty()) {
+        MessageDialog dlg(this,
+                          _L("There are some unknown or incompatible filaments mapped to generic preset.\nPlease update Orca "
+                             "Slicer or restart Orca Slicer to check if there is an update to system presets.") +
+                              detail,
+                          _L("Sync filaments with AMS"), wxOK);
+        dlg.ShowModal();
+    }
+    return true;
+}
+
 void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
 {
     wxBusyCursor cursor;
     // Force load ams list
     auto obj = wxGetApp().getDeviceManager()->get_selected_machine();
-    if (!obj)
+    if (!obj) {
+        // No directly-connected machine. If a Print Farm printer is the active
+        // upload target, sync filaments from the farm's reported spools instead.
+        sync_ams_list_from_farm();
         return;
+    }
     GUI::wxGetApp().sidebar().load_ams_list(obj);
 
     auto & list = wxGetApp().preset_bundle->filament_ams_list;

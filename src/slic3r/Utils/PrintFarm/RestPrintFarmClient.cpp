@@ -87,6 +87,17 @@ PfPrinter parse_printer(const json& j)
     if (j.contains("errorMessage") && !j["errorMessage"].is_null())
         p.error_message = j["errorMessage"].get<std::string>();
     p.can_upload = profile_supports_upload(p.profile);
+    if (j.contains("spools") && j["spools"].is_array()) {
+        for (const auto& s : j["spools"]) {
+            PfSpool spool;
+            spool.id        = s.value("id", std::string{});
+            spool.color     = s.value("color", std::string{});
+            spool.material  = s.value("material", std::string{});
+            spool.remaining = s.value("remaining", 0.0);
+            spool.weight    = s.value("weight", 0.0);
+            p.spools.push_back(std::move(spool));
+        }
+    }
     return p;
 }
 

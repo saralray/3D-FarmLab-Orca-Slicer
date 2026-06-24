@@ -34,6 +34,19 @@ struct PrintFarmConfig
 };
 
 // Mirrors a GET /api/printers record (live telemetry overlaid by the poller).
+// One loaded filament lane reported by the backend (a printer's `spools[]` entry,
+// built by the poller from the printer's AMS / task config). Drives the
+// "Synchronize filament list" action for farm printers, which have no direct
+// MachineObject connection in the slicer.
+struct PfSpool
+{
+    std::string id;        // lane id, e.g. "tool-1"
+    std::string color;     // "#RRGGBB"
+    std::string material;  // generic material type, e.g. "PLA", "PETG"
+    double      remaining = 0; // percent (0..100), 0 when unknown
+    double      weight    = 0; // grams, 0 when unknown
+};
+
 struct PfPrinter
 {
     std::string id;
@@ -43,6 +56,7 @@ struct PfPrinter
     std::string status;         // idle | printing | offline
     std::string error_message;  // human-readable fault, empty when healthy
     bool        can_upload = false; // derived: profile supports slicer-proxy upload
+    std::vector<PfSpool> spools;    // loaded filaments, empty when none reported
 };
 
 // Job status as surfaced to the user. Backend "queue" rows + locally-tracked uploads.

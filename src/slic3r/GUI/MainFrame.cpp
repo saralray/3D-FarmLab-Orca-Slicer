@@ -2745,6 +2745,18 @@ void MainFrame::show_print_farm_login()
     overlay->Move(0, 0);
     overlay->Raise();
     overlay->SetFocus();
+    // On the first show (app startup) paint fires as part of the initial frame
+    // render. On subsequent shows (after logout) the frame is already fully
+    // rendered and the new child panel needs an explicit refresh, otherwise it
+    // stays invisible behind the existing content. Deferring via CallAfter also
+    // ensures the raise happens after any deferred events triggered by
+    // Enable(false) above settle, so the overlay reliably ends up on top.
+    CallAfter([this]() {
+        if (m_pf_login_overlay) {
+            m_pf_login_overlay->Raise();
+            m_pf_login_overlay->Refresh();
+        }
+    });
 
     // Keep the overlay covering the whole client area as the window resizes. Bound
     // once: the overlay can be shown again after a logout, but the handler stays

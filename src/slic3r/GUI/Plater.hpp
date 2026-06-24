@@ -194,6 +194,11 @@ public:
     void load_ams_list(MachineObject* obj);
     std::map<int, DynamicPrintConfig> build_filament_ams_list(MachineObject* obj);
     void sync_ams_list(bool is_from_big_sync_btn = false);
+    // Print Farm fallback for sync_ams_list(): when no machine is directly
+    // connected but a farm printer is the active upload target, sync filaments
+    // from the farm's reported spool loadout. Returns true when it handled the
+    // request (farm context present), false to let the caller keep prior behavior.
+    bool sync_ams_list_from_farm();
     bool sync_extruder_list();
     bool need_auto_sync_extruder_list_after_connect_priner(const MachineObject* obj);
     void update_sync_status(const MachineObject* obj);
