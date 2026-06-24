@@ -503,7 +503,11 @@ PfResult RestPrintFarmClient::upload_job(const std::string& printer_id,
     auto http = Http::post(url);
     apply_tls(http);
     apply_api_key(http);
-    http.form_add_file("file", file_path)
+    // OctoPrint-emulation: "select"+"print" tell the backend to start the print
+    // right after the file lands, instead of only storing it on the printer.
+    http.form_add("select", "true")
+        .form_add("print", "true")
+        .form_add_file("file", file_path)
         .on_progress([&](Http::Progress progress, bool& /*cancel*/) {
             if (on_progress && progress.ultotal > 0) {
                 int pct = static_cast<int>((progress.ulnow * 100) / progress.ultotal);
