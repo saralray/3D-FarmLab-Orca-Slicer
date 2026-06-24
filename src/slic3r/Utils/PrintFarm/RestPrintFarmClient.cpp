@@ -1,11 +1,13 @@
 // >>> PRINTFARM
 #include "RestPrintFarmClient.hpp"
 
+#include <cctype>
 #include <regex>
 #include <sstream>
 
 #include <openssl/sha.h>
 #include <boost/log/trivial.hpp>
+#include <boost/filesystem/path.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
 #include "nlohmann/json.hpp"
@@ -55,6 +57,35 @@ std::string trim_trailing_slashes(std::string s)
     while (!s.empty() && s.back() == '/')
         s.pop_back();
     return s;
+}
+
+// Make a basename safe for the printer's FTP server. Bambu FTP returns
+// "553 Could not create file" for names with spaces or non-ASCII characters,
+// so we (1) drop the internal "orca-farm-<hex>-" temp prefix added in
+// Plater::export_to_farm(), and (2) replace anything outside [A-Za-z0-9._-]
+// with '_'. The ".gcode.3mf" bundle extension is preserved — that is exactly
+// what Bambu printers expect to print.
+std::string ftp_safe_filename(const std::string& path)
+{
+    std::string name = boost::filesystem::path(path).filename().string();
+    name = std::regex_replace(name, std::regex(R"(^orca-farm-[0-9a-fA-F]+-)"), "");
+    for (char& c : name) {
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-'))
+            c = '_';
+    }
+    if (name.empty())
+        name = "print.gcode.3mf";
+    // Bambu FTP also rejects very long names; cap the stem while keeping the
+    // ".gcode.3mf" (or other) extension intact.
+    constexpr size_t kMaxLen = 100;
+    if (name.size() > kMaxLen) {
+        const std::string ext = boost::algorithm::ends_with(name, ".gcode.3mf")
+                                    ? ".gcode.3mf"
+                                    : boost::filesystem::path(name).extension().string();
+        const size_t stem_len = ext.size() < kMaxLen ? kMaxLen - ext.size() : 0;
+        name = name.substr(0, stem_len) + ext;
+    }
+    return name;
 }
 
 // Pull the pf_session value out of an accumulated Set-Cookie header blob.
@@ -507,7 +538,7 @@ PfResult RestPrintFarmClient::upload_job(const std::string& printer_id,
     // right after the file lands, instead of only storing it on the printer.
     http.form_add("select", "true")
         .form_add("print", "true")
-        .form_add_file("file", file_path)
+        .form_add_file("file", file_path, ftp_safe_filename(file_path))
         .on_progress([&](Http::Progress progress, bool& /*cancel*/) {
             if (on_progress && progress.ultotal > 0) {
                 int pct = static_cast<int>((progress.ulnow * 100) / progress.ultotal);
@@ -523,6 +554,14 @@ PfResult RestPrintFarmClient::upload_job(const std::string& printer_id,
                 msg = "Upload rejected: printer not found on the farm.";
             else if (status == 415)
                 msg = "This printer's profile does not support slicer uploads.";
+            // The backend relays the printer's FTP error verbatim. A 553 means the
+            // printer could not create the file — almost always no/locked SD card
+            // or a missing target folder, neither of which the slicer controls.
+            else if (b.find("553") != std::string::npos ||
+                     b.find("Could not create file") != std::string::npos)
+                msg = "The printer rejected the file (FTP 553: could not create file). "
+                      "Check that an SD card is inserted, has free space, and is not "
+                      "write-protected, then try again.";
             result = PfResult::failure(msg, status);
         })
         .perform_sync();
