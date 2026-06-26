@@ -249,6 +249,11 @@ PfResult RestPrintFarmClient::login(const std::string& email, const std::string&
     auto http = Http::post(api_url("/api/auth/login"));
     apply_tls(http);
     http.header("Content-Type", "application/json")
+        // Bounded timeout so an unreachable backend fails the sign-in promptly
+        // instead of blocking the UI thread (login runs synchronously). Matches
+        // the timeouts used by the other endpoints in this client.
+        .timeout_connect(5)
+        .timeout_max(20)
         .set_post_body(body.dump())
         .on_header_callback([&](std::string h) { headers_blob = std::move(h); })
         .on_complete([&](std::string b, unsigned status) {

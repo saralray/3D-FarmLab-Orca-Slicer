@@ -2718,39 +2718,53 @@ static wxMenu* build_print_farm_menu(MainFrame* self)
 
 void MainFrame::show_print_farm_login()
 {
-    // The session lives in memory only, so the login overlay is shown on every
-    // launch. It is a full-window child panel (not a popup) that covers the UI
-    // until the user signs in or quits.
+    // The session lives in memory only, so the login page is shown on every
+    // launch. It is a full-window child panel (not a popup) that stands in for
+    // the app UI until the user signs in or quits.
+    //
+    // A plain child panel cannot reliably paint over the rest of the frame: the
+    // Plater hosts a native WebView2 home page, whose native window bleeds over
+    // sibling wx panels regardless of Z-order (the classic "airspace" problem),
+    // so Raise() alone left the login invisible behind the home page. Instead we
+    // hide the frame's content children (topbar + tab panel, including the
+    // WebView) while the login page is up, then restore them on success. With
+    // the native windows hidden, nothing can paint over the login page.
     if (m_pf_login_overlay != nullptr || PrintFarmManager::instance().is_logged_in())
         return;
 
     auto* overlay = new PrintFarmLoginPanel(
         this,
-        [this]() { // on success: reveal the app and surface the synced printers
+        [this]() { // on success: restore the app UI and surface the synced printers
+            for (auto& [win, was_shown] : m_pf_hidden_windows)
+                if (win) win->Show(was_shown);
+            m_pf_hidden_windows.clear();
             if (m_pf_login_overlay) {
                 m_pf_login_overlay->Destroy();
                 m_pf_login_overlay = nullptr;
             }
-            if (m_topbar)
-                m_topbar->Enable(true);
+            Layout();
             if (m_plater)
                 m_plater->sidebar().update_all_preset_comboboxes();
         },
         [this]() { Close(true); }); // on quit: exit the app
 
     m_pf_login_overlay = overlay;
-    if (m_topbar)
-        m_topbar->Enable(false);
+
+    // Hide every other direct child of the frame (topbar, tab panel with its
+    // WebView, etc.), remembering each one's prior shown state for restoration.
+    m_pf_hidden_windows.clear();
+    for (wxWindow* child : GetChildren()) {
+        if (child == overlay)
+            continue;
+        m_pf_hidden_windows.emplace_back(child, child->IsShown());
+        child->Hide();
+    }
+
     overlay->SetSize(GetClientSize());
     overlay->Move(0, 0);
+    overlay->Show();
     overlay->Raise();
     overlay->SetFocus();
-    // On the first show (app startup) paint fires as part of the initial frame
-    // render. On subsequent shows (after logout) the frame is already fully
-    // rendered and the new child panel needs an explicit refresh, otherwise it
-    // stays invisible behind the existing content. Deferring via CallAfter also
-    // ensures the raise happens after any deferred events triggered by
-    // Enable(false) above settle, so the overlay reliably ends up on top.
     CallAfter([this]() {
         if (m_pf_login_overlay) {
             m_pf_login_overlay->Raise();
@@ -2758,9 +2772,9 @@ void MainFrame::show_print_farm_login()
         }
     });
 
-    // Keep the overlay covering the whole client area as the window resizes. Bound
-    // once: the overlay can be shown again after a logout, but the handler stays
-    // valid because it re-reads m_pf_login_overlay each time.
+    // Keep the login page covering the whole client area as the window resizes.
+    // Bound once: the page can be shown again after a logout, but the handler
+    // stays valid because it re-reads m_pf_login_overlay each time.
     if (!m_pf_size_bound) {
         m_pf_size_bound = true;
         Bind(wxEVT_SIZE, [this](wxSizeEvent& e) {
@@ -2775,8 +2789,8 @@ void MainFrame::show_print_farm_login()
 
 void MainFrame::print_farm_logout()
 {
-    // Clear the in-memory session, then bring the login overlay back so the user
-    // lands on the login page again (no restart required).
+    // Clear the in-memory session, then bring the in-app login page back so the
+    // user lands on it again (no restart required).
     PrintFarmManager::instance().logout();
     if (m_plater)
         m_plater->sidebar().update_all_preset_comboboxes();

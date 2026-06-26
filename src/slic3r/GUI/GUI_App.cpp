@@ -3015,7 +3015,7 @@ bool GUI_App::on_init_inner()
         wxYield();
     }
     // >>> PRINTFARM
-    // Load the (non-secret) config; the in-window login overlay is shown after the
+    // Load the (non-secret) config; the in-window login page is shown after the
     // main frame appears (see mainframe->show_print_farm_login() below).
     PrintFarmManager::instance().load_config(app_config);
     // <<< PRINTFARM
@@ -3063,7 +3063,7 @@ bool GUI_App::on_init_inner()
     mainframe->Show(true);
     // Close the splash now that the main UI is visible.
     if (scrn) { scrn->Destroy(); scrn = nullptr; }
-    // >>> PRINTFARM: gate the app behind the in-window login overlay.
+    // >>> PRINTFARM: gate the app behind the in-window login page.
     mainframe->show_print_farm_login();
     // <<< PRINTFARM
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";

@@ -222,6 +222,9 @@ public:
 private:
     wxWindow* m_pf_login_overlay = nullptr;
     bool      m_pf_size_bound    = false; // size handler for the overlay bound once
+    // Frame children hidden while the login page is up, with their prior shown
+    // state, so they can be restored exactly on a successful sign-in.
+    std::vector<std::pair<wxWindow*, bool>> m_pf_hidden_windows;
 public:
     // <<< PRINTFARM
     //BBS GUI refactor
