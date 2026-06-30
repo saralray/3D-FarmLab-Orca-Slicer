@@ -4,6 +4,7 @@
 #include <wx/sizer.h>
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
+#include <wx/secretstore.h>
 
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
@@ -20,6 +21,10 @@ namespace GUI {
 
 // Default backend address offered on first run, before any URL is configured.
 static const char* PF_DEFAULT_URL = "http://127.0.0.1:8080";
+
+// Keychain service name for saved login credentials (separate from the API-key entry).
+static const char* PF_LOGIN_SERVICE  = "OrcaSlicer/PrintFarmLogin";
+static const char* PF_LOGIN_CRED_KEY = "saved_password";
 
 // 3D-FarmLab theme. The accent is Orca's teal (#009688) so the login reads as part
 // of the same application rather than a bolted-on dialog.
@@ -127,6 +132,13 @@ PrintFarmLoginPanel::PrintFarmLoginPanel(wxWindow*             parent,
     m_email      = add_field(_L("Email"), wxEmptyString, _L("you@example.com"), 0);
     m_password   = add_field(_L("Password"), wxEmptyString, _L("Your password"), wxTE_PASSWORD);
 
+    // Remember me checkbox — pre-checked if credentials were previously saved.
+    m_remember = new wxCheckBox(card, wxID_ANY, _L("Remember me"));
+    m_remember->SetFont(::Label::Body_13);
+    m_remember->SetForegroundColour(kLabel);
+    m_remember->SetBackgroundColour(kCard);
+    card_sizer->Add(m_remember, 0, wxLEFT | wxRIGHT | wxTOP, hpad);
+
     m_error = new wxStaticText(card, wxID_ANY, wxEmptyString);
     m_error->SetFont(::Label::Body_12);
     m_error->SetForegroundColour(kError);
@@ -138,15 +150,19 @@ PrintFarmLoginPanel::PrintFarmLoginPanel(wxWindow*             parent,
     m_sign_in->SetMinSize(wxSize(-1, FromDIP(38)));
     card_sizer->Add(m_sign_in, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, hpad);
 
+    // Secondary actions share one row so the card stays compact.
     m_skip = new Button(card, _L("Use without login"));
     m_skip->SetStyle(ButtonStyle::Regular, ButtonType::Window);
     m_skip->SetMinSize(wxSize(-1, FromDIP(34)));
-    card_sizer->Add(m_skip, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, hpad);
 
     m_quit = new Button(card, _L("Quit"));
     m_quit->SetStyle(ButtonStyle::Regular, ButtonType::Window);
     m_quit->SetMinSize(wxSize(-1, FromDIP(34)));
-    card_sizer->Add(m_quit, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, hpad);
+
+    auto* sec_row = new wxBoxSizer(wxHORIZONTAL);
+    sec_row->Add(m_skip, 1, wxRIGHT, FromDIP(8));
+    sec_row->Add(m_quit, 1, 0, 0);
+    card_sizer->Add(sec_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, hpad);
 
     card_sizer->AddSpacer(FromDIP(28));
     card->SetSizer(card_sizer);
@@ -177,7 +193,18 @@ PrintFarmLoginPanel::PrintFarmLoginPanel(wxWindow*             parent,
     for (TextInput* in : {m_server_url, m_email, m_password})
         in->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &PrintFarmLoginPanel::on_sign_in, this);
 
-    m_email->GetTextCtrl()->SetFocus();
+    // Pre-fill saved credentials and focus the appropriate field.
+    {
+        std::string saved_email, saved_pwd;
+        if (load_credentials(saved_email, saved_pwd)) {
+            m_email->GetTextCtrl()->SetValue(wxString::FromUTF8(saved_email));
+            m_password->GetTextCtrl()->SetValue(wxString::FromUTF8(saved_pwd));
+            m_remember->SetValue(true);
+            m_sign_in->SetFocus();
+        } else {
+            m_email->GetTextCtrl()->SetFocus();
+        }
+    }
 }
 
 void PrintFarmLoginPanel::set_error(const wxString& msg)
@@ -234,12 +261,52 @@ void PrintFarmLoginPanel::on_sign_in(wxCommandEvent& /*evt*/)
     set_busy(false);
 
     if (res.ok) {
+        if (m_remember->GetValue())
+            save_credentials(email, pwd);
+        else
+            clear_credentials();
         if (m_on_success) { auto cb = m_on_success; CallAfter([cb]() { cb(); }); }
         return;
     }
     set_error(wxString::FromUTF8(res.error.empty() ? "Login failed." : res.error));
     m_password->GetTextCtrl()->SetValue(wxEmptyString);
     m_password->GetTextCtrl()->SetFocus();
+}
+
+void PrintFarmLoginPanel::save_credentials(const std::string& email, const std::string& pwd)
+{
+    wxGetApp().app_config->set("print_farm", "saved_email", email);
+    wxGetApp().app_config->save();
+    wxSecretStore store = wxSecretStore::GetDefault();
+    if (store.IsOk()) {
+        wxSecretValue value(wxString::FromUTF8(pwd.c_str()));
+        store.Save(PF_LOGIN_SERVICE, PF_LOGIN_CRED_KEY, value);
+    }
+}
+
+void PrintFarmLoginPanel::clear_credentials()
+{
+    wxGetApp().app_config->erase("print_farm", "saved_email");
+    wxGetApp().app_config->save();
+    wxSecretStore store = wxSecretStore::GetDefault();
+    if (store.IsOk())
+        store.Delete(PF_LOGIN_SERVICE);
+}
+
+bool PrintFarmLoginPanel::load_credentials(std::string& email, std::string& pwd)
+{
+    email = wxGetApp().app_config->get("print_farm", "saved_email");
+    if (email.empty())
+        return false;
+    wxSecretStore store = wxSecretStore::GetDefault();
+    if (!store.IsOk())
+        return false;
+    wxString      user_out;
+    wxSecretValue value;
+    if (!store.Load(PF_LOGIN_SERVICE, user_out, value) || !value.IsOk())
+        return false;
+    pwd.assign(static_cast<const char*>(value.GetData()), value.GetSize());
+    return !pwd.empty();
 }
 
 } // namespace GUI

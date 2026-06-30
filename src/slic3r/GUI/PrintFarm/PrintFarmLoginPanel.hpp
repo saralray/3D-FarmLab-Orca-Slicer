@@ -11,6 +11,7 @@
 
 #include <wx/wx.h>
 #include <wx/panel.h>
+#include <wx/checkbox.h>
 
 class Button;
 class TextInput;
@@ -33,10 +34,14 @@ private:
     void on_sign_in(wxCommandEvent& evt);
     void set_busy(bool busy);
     void set_error(const wxString& msg);
+    void save_credentials(const std::string& email, const std::string& pwd);
+    void clear_credentials();
+    bool load_credentials(std::string& email, std::string& pwd);
 
     TextInput*    m_server_url = nullptr; // editable so the backend can be re-pointed
     TextInput*    m_email      = nullptr;
     TextInput*    m_password   = nullptr;
+    wxCheckBox*   m_remember   = nullptr;
     wxStaticText* m_error      = nullptr;
     Button*       m_sign_in    = nullptr;
     Button*       m_skip       = nullptr;
