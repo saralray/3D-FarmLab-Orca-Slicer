@@ -42,7 +42,8 @@ declare -a lib_paths=(
 for candidate in \
     "$APPDIR/lib/gstreamer-1.0" \
     "$APPDIR/lib/gio/modules" \
-    "$APPDIR/lib/gdk-pixbuf-2.0/2.10.0/loaders"; do
+    "$APPDIR/lib/gdk-pixbuf-2.0/2.10.0/loaders" \
+    "$APPDIR/resources/plugins"; do
     if [[ -d "$candidate" ]]; then
         lib_paths+=("$candidate")
     fi
