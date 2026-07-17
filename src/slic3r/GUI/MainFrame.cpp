@@ -2504,6 +2504,8 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
         m_multi_machine->msw_rescale();
     if(m_calibration)
         m_calibration->msw_rescale();
+    if(m_print_farm) // >>> PRINTFARM <<<
+        m_print_farm->msw_rescale();
 
     // BBS
 #if 0
@@ -2569,6 +2571,8 @@ void MainFrame::on_sys_color_changed()
         m_monitor->on_sys_color_changed();
     if(m_calibration)
         m_calibration->on_sys_color_changed();
+    if(m_print_farm) // >>> PRINTFARM <<<
+        m_print_farm->on_sys_color_changed();
     // update Tabs
     for (auto tab : wxGetApp().tabs_list)
         tab->sys_color_changed();

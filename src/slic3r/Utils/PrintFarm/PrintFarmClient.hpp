@@ -57,6 +57,13 @@ struct PfPrinter
     std::string error_message;  // human-readable fault, empty when healthy
     bool        can_upload = false; // derived: profile supports slicer-proxy upload
     std::vector<PfSpool> spools;    // loaded filaments, empty when none reported
+
+    // Live print telemetry (from the poller's overlay on GET /api/printers).
+    double      progress = 0;           // 0..100, current print progress
+    std::string current_job;            // currentJob.filename, empty when idle
+    int         time_remaining_min = 0; // currentJob.timeRemaining, minutes
+    double      nozzle_temp = 0;        // temperature.nozzle, Celsius
+    double      bed_temp    = 0;        // temperature.bed, Celsius
 };
 
 // Job status as surfaced to the user. Backend "queue" rows + locally-tracked uploads.
@@ -73,6 +80,9 @@ struct PfJob
     std::string submitted_at;
     std::string submitter;
     std::string detail;         // optional extra info (error text, progress, ...)
+    bool        has_file = false; // backend stores a downloadable model for this job
+    std::string file_url;       // stlFileUrl (legacy/external link), optional
+    int         priority = 0;   // scheduling priority, for display/sort
 };
 
 struct PfUser
@@ -119,6 +129,13 @@ public:
     virtual PfResult get_job(const std::string& id, PfJob& out) = 0;
     // Cancel/remove a queued job (DELETE /api/queue/{id}).
     virtual PfResult cancel_job(const std::string& id) = 0;
+
+    // Download a queued job's stored model file to dest_path (session credential;
+    // GET /api/queue/{id}/file). 404 when the job has no stored file, 403 when the
+    // session lacks the staff role required to read it.
+    virtual PfResult download_job(const std::string& id,
+                                  const std::string& dest_path,
+                                  const ProgressFn&  on_progress) = 0;
 
     // ---- Ephemeral upload token (session credential) ----
     // Mint a short-lived slicer-upload API key bound to the current session and

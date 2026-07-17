@@ -8,6 +8,8 @@
 #include <openssl/sha.h>
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/fstream.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
 #include "nlohmann/json.hpp"
@@ -129,17 +131,59 @@ PfPrinter parse_printer(const json& j)
             p.spools.push_back(std::move(spool));
         }
     }
+    // Live print telemetry (overlaid by the poller); all fields optional.
+    if (j.contains("progress") && j["progress"].is_number())
+        p.progress = j["progress"].get<double>();
+    if (j.contains("temperature") && j["temperature"].is_object()) {
+        const auto& t = j["temperature"];
+        p.nozzle_temp = t.value("nozzle", 0.0);
+        p.bed_temp    = t.value("bed", 0.0);
+    }
+    if (j.contains("currentJob") && j["currentJob"].is_object()) {
+        const auto& cj = j["currentJob"];
+        p.current_job        = cj.value("filename", std::string{});
+        p.time_remaining_min = cj.value("timeRemaining", 0);
+    }
     return p;
 }
 
-// Map a backend queue row's printed_status to our PfJobStatus.
+PfJobStatus map_queue_status(const json& j); // defined below
+
+// Parse a single queue row (GET /api/queue -> queue[]/history[]). Queue jobs are
+// print requests and are NOT tied to a printer, so printer_id/name stay empty.
+PfJob parse_job(const json& j)
+{
+    PfJob job;
+    job.id           = j.value("id", std::string{});
+    job.name         = j.value("filename", j.value("name", std::string{}));
+    job.submitted_at = j.value("submittedAt", j.value("submitted_at", std::string{}));
+    job.submitter    = j.value("submitterName", j.value("submitter", std::string{}));
+    job.status       = map_queue_status(j);
+    if (j.contains("hasFile") && j["hasFile"].is_boolean())
+        job.has_file = j["hasFile"].get<bool>();
+    if (j.contains("stlFileUrl") && j["stlFileUrl"].is_string())
+        job.file_url = j["stlFileUrl"].get<std::string>();
+    if (j.contains("priority") && j["priority"].is_number_integer())
+        job.priority = j["priority"].get<int>();
+    return job;
+}
+
+// Map a backend queue row to our PfJobStatus. The backend sends a `status` string
+// (queued|printing|completed|failed|paused) plus an integer `printedStatus` (0/1);
+// prefer the string, fall back to the integer.
 PfJobStatus map_queue_status(const json& j)
 {
-    const std::string s = j.value("printedStatus", j.value("printed_status", std::string{}));
-    if (s == "printing")  return PfJobStatus::Printing;
-    if (s == "printed" || s == "done" || s == "completed") return PfJobStatus::Completed;
-    if (s == "failed" || s == "error")     return PfJobStatus::Failed;
-    if (s == "cancelled" || s == "canceled") return PfJobStatus::Cancelled;
+    if (j.contains("status") && j["status"].is_string()) {
+        const std::string s = j["status"].get<std::string>();
+        if (s == "printing")  return PfJobStatus::Printing;
+        if (s == "printed" || s == "done" || s == "completed") return PfJobStatus::Completed;
+        if (s == "failed" || s == "error")       return PfJobStatus::Failed;
+        if (s == "cancelled" || s == "canceled") return PfJobStatus::Cancelled;
+        if (s == "queued")    return PfJobStatus::Queued;
+    }
+    // printedStatus is an integer: 1 == printed/completed, 0 == still queued.
+    if (j.contains("printedStatus") && j["printedStatus"].is_number_integer())
+        return j["printedStatus"].get<int>() == 1 ? PfJobStatus::Completed : PfJobStatus::Queued;
     return PfJobStatus::Queued;
 }
 
@@ -401,17 +445,20 @@ PfResult RestPrintFarmClient::get_jobs(std::vector<PfJob>& out)
     out.clear();
     try {
         auto j = json::parse(resp);
-        const auto& arr = j.is_array() ? j : (j.contains("jobs") ? j["jobs"] : json::array());
-        for (const auto& item : arr) {
-            PfJob job;
-            job.id           = item.value("id", std::string{});
-            job.name         = item.value("filename", item.value("name", std::string{}));
-            job.printer_id   = item.value("printerId", item.value("printer_id", std::string{}));
-            job.printer_name = item.value("printerName", std::string{});
-            job.submitted_at = item.value("submittedAt", item.value("submitted_at", std::string{}));
-            job.submitter    = item.value("submitterName", item.value("submitter", std::string{}));
-            job.status       = map_queue_status(item);
-            out.push_back(std::move(job));
+        // The frontend queue endpoint returns { queue: [...], history: [...] };
+        // accept a bare array or a legacy "jobs" key too, for robustness.
+        auto add_all = [&out](const json& arr) {
+            if (!arr.is_array())
+                return;
+            for (const auto& item : arr)
+                out.push_back(parse_job(item));
+        };
+        if (j.is_array()) {
+            add_all(j);
+        } else {
+            if (j.contains("queue"))   add_all(j["queue"]);
+            if (j.contains("history")) add_all(j["history"]);
+            if (out.empty() && j.contains("jobs")) add_all(j["jobs"]);
         }
     } catch (const std::exception& e) {
         return PfResult::failure(std::string("Could not parse jobs: ") + e.what());
@@ -455,6 +502,64 @@ PfResult RestPrintFarmClient::cancel_job(const std::string& id)
         })
         .perform_sync();
     PF_LOG(info) << "cancel_job id=" << id << (result.ok ? " ok" : " failed");
+    return result;
+}
+
+PfResult RestPrintFarmClient::download_job(const std::string& id,
+                                           const std::string& dest_path,
+                                           const ProgressFn&  on_progress)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_session_cookie.empty())
+        return PfResult::failure("Not signed in.", 401);
+    if (id.empty())
+        return PfResult::failure("No job selected.");
+
+    // GET /api/queue/<id>/file streams the stored model bytes (session credential).
+    PfResult    result = PfResult::failure("Failed to download the file.");
+    std::string body;
+    auto http = Http::get(api_url("/api/queue/" + Http::url_encode(id) + "/file"));
+    apply_tls(http);
+    apply_session(http);
+    http.timeout_max(120)
+        .on_progress([&](Http::Progress progress, bool& /*cancel*/) {
+            if (on_progress && progress.dltotal > 0) {
+                int pct = static_cast<int>((progress.dlnow * 100) / progress.dltotal);
+                on_progress(pct < 0 ? 0 : (pct > 100 ? 100 : pct));
+            }
+        })
+        .on_complete([&](std::string b, unsigned status) { body = std::move(b); result = PfResult::success(status); })
+        .on_error([&](std::string b, std::string error, unsigned status) {
+            std::string msg = http_error_message(b, error, status);
+            if (status == 403)      msg = "Not authorized to download this file (staff access required).";
+            else if (status == 404) msg = "This job has no stored file to download.";
+            result = PfResult::failure(msg, status);
+        })
+        .perform_sync();
+
+    if (!result.ok)
+        return result;
+
+    // Write to a sibling .part file, then rename into place so a failed/partial
+    // write never leaves a truncated file the Plater would try to open.
+    try {
+        namespace fs = boost::filesystem;
+        const fs::path dest(dest_path);
+        const fs::path part = fs::path(dest_path + ".part");
+        {
+            fs::ofstream out(part, std::ios::out | std::ios::binary | std::ios::trunc);
+            if (!out.good())
+                return PfResult::failure("Could not write the downloaded file.");
+            out.write(body.data(), static_cast<std::streamsize>(body.size()));
+            out.close();
+        }
+        if (fs::exists(dest))
+            fs::remove(dest);
+        fs::rename(part, dest);
+    } catch (const std::exception& e) {
+        return PfResult::failure(std::string("Could not save the downloaded file: ") + e.what());
+    }
+    PF_LOG(info) << "download_job id=" << id << " -> " << dest_path << " (" << body.size() << " bytes)";
     return result;
 }
 

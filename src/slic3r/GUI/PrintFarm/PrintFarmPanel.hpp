@@ -3,13 +3,13 @@
 
 // >>> PRINTFARM
 // Top-level "Print Farm" tab body (registered alongside Prepare/Preview/Device).
-// Shows a richer, card-based printer-status grid and the backend job queue, with
-// manual + automatic refresh. When the user is not signed in, a sign-in prompt is
-// shown instead and routes to the existing in-window login overlay.
+// Shows a card-based printer-status grid with live print progress, plus the backend
+// job queue with "Send to Prepare" (download a queued model and open it) and cancel.
+// When the user is not signed in, a sign-in prompt routes to the login overlay.
 //
-// This reuses PrintFarmManager (printers + status) and IPrintFarmClient (jobs)
-// rather than adding any new transport; it is the panel form of the logic in
-// PrintFarmJobsDialog.
+// Built with OrcaSlicer's own widget toolkit (StaticBox / Button / Label /
+// ProgressBar) and dark-mode aware, to match the rest of the app. Reuses
+// PrintFarmManager (printers + status) and IPrintFarmClient (jobs + download).
 
 #include <vector>
 
@@ -24,6 +24,7 @@ class wxScrolledWindow;
 class wxListCtrl;
 class wxStaticText;
 class wxSimplebook;
+class Button;
 
 namespace Slic3r {
 namespace GUI {
@@ -45,9 +46,12 @@ public:
     void refresh_all();
 
     // Re-evaluate login state and switch between the sign-in prompt and the
-    // dashboard. Call after a Print Farm login/logout so the change is immediate
-    // (the timer would otherwise pick it up on the next tick).
+    // dashboard. Called after a Print Farm login/logout so the change is immediate.
     void update_auth_view();
+
+    // DPI change / theme change hooks, wired from MainFrame like the sibling tabs.
+    void msw_rescale();
+    void on_sys_color_changed();
 
 private:
     void build_ui();
@@ -55,6 +59,9 @@ private:
     void refresh_jobs();
     void set_status(const wxString& text, bool error = false);
     void on_timer(wxTimerEvent& evt);
+    void on_cancel_job();
+    void on_send_to_prepare();
+    void update_job_buttons();
 
     wxWindow* make_printer_card(wxWindow* parent, const PfPrinter& p);
 
@@ -66,6 +73,8 @@ private:
     wxWrapSizer*      m_cards_sizer = nullptr;
     wxListCtrl*       m_jobs        = nullptr;
     wxStaticText*     m_status      = nullptr;
+    Button*           m_send_btn    = nullptr;
+    Button*           m_cancel_btn  = nullptr;
 
     wxTimer            m_timer;
     std::vector<PfJob> m_jobs_cache;      // row-aligned with m_jobs for selection
