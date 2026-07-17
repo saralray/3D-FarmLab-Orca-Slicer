@@ -510,6 +510,20 @@ int PresetComboBox::selected_connected_printer() const
 }
 
 // >>> PRINTFARM
+// A small solid-colour status swatch shown next to each farm printer in the
+// dropdown: green = idle, blue = printing, grey = offline/unknown. Reuses the same
+// BitmapCache::mksolid path the filament colour swatches use.
+wxBitmap PresetComboBox::farm_status_bitmap(const std::string& status)
+{
+    unsigned char r = 0x9A, g = 0x9A, b = 0x9A; // offline / unknown
+    if (status == "printing") { r = 0x1A; g = 0x88; b = 0xE0; } // blue
+    else if (status == "idle") { r = 0x2E; g = 0xA0; b = 0x43; } // green
+
+    const size_t sz = std::max<size_t>(1, icon_height);
+    return bitmap_cache().mksolid(sz, sz, r, g, b, wxALPHA_OPAQUE, false, 1,
+                                  Slic3r::GUI::wxGetApp().dark_mode());
+}
+
 // List the backend-synced farm printers under a "Print Farm" header. These are
 // read-only selections (the user cannot add printers); selecting one switches to
 // the matching machine profile and marks it as the upload target — handled in
@@ -533,8 +547,18 @@ void PresetComboBox::add_farm_printers()
     set_label_marker(Append(_L("Print Farm"), wxNullBitmap, DD_ITEM_STYLE_SPLIT_ITEM));
     m_first_farm_idx = GetCount();
     for (const auto& p : printers) {
-        const wxString label = from_u8(p.name) + " (" + _L("Farm") + ")";
-        Append(label, wxNullBitmap);
+        // Status is also spelled out in the label so it is legible without relying
+        // on colour alone (green=idle / blue=printing / grey=offline).
+        wxString status_word;
+        if (p.status == "idle")          status_word = _L("Idle");
+        else if (p.status == "printing") status_word = _L("Printing");
+        else if (p.status == "offline")  status_word = _L("Offline");
+        else if (!p.status.empty())      status_word = wxString::FromUTF8(p.status);
+
+        wxString label = from_u8(p.name) + " (" + _L("Farm") + ")";
+        if (!status_word.empty())
+            label += " - " + status_word;
+        Append(label, farm_status_bitmap(p.status));
         m_farm_ids.push_back(p.id);
     }
     m_last_farm_idx = GetCount();

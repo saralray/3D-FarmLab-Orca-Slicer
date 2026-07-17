@@ -33,6 +33,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PrintFarm/PrintFarmSettingsDialog.hpp
     GUI/PrintFarm/PrintFarmJobsDialog.cpp
     GUI/PrintFarm/PrintFarmJobsDialog.hpp
+    GUI/PrintFarm/PrintFarmPanel.cpp
+    GUI/PrintFarm/PrintFarmPanel.hpp
     # <<< PRINTFARM
     GUI/AmsMappingPopup.cpp
     GUI/AmsMappingPopup.hpp

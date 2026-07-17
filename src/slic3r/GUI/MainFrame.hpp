@@ -52,6 +52,7 @@ class PrintHostQueueDialog;
 class Plater;
 class MainFrame;
 class ParamsDialog;
+class PrintFarmPanel; // >>> PRINTFARM <<<
 #ifdef __WXGTK__
 class ResizeEdgePanel;
 #endif
@@ -239,6 +240,7 @@ public:
         tpCalibration   = 6,
         tpAuxiliary     = 7,
         toDebugTool     = 8,
+        tpPrintFarm     = 9, // >>> PRINTFARM: appended at the end so existing indices don't shift <<<
     };
 
     //BBS: add slice&&print status update logic
@@ -397,6 +399,7 @@ public:
     //AuxiliaryPanel*       m_auxiliary{ nullptr };
     MultiMachinePage*     m_multi_machine{ nullptr };
     ProjectPanel*         m_project{ nullptr };
+    PrintFarmPanel*       m_print_farm{ nullptr }; // >>> PRINTFARM <<<
 
     CalibrationPanel*     m_calibration{ nullptr };
     WebViewPanel*         m_webview { nullptr };
