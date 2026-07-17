@@ -57,6 +57,7 @@
 #include "PrintFarm/PrintFarmSettingsDialog.hpp"
 #include "PrintFarm/PrintFarmJobsDialog.hpp"
 #include "PrintFarm/PrintFarmLoginPanel.hpp"
+#include "PrintFarm/PrintFarmPanel.hpp"
 // <<< PRINTFARM
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
@@ -1333,6 +1334,13 @@ void MainFrame::init_tabpanel() {
     m_monitor = new MonitorPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_monitor->SetBackgroundColour(*wxWHITE);
     m_tabpanel->AddPage(m_monitor, _L("Device"), std::string("tab_monitor_active"), std::string("tab_monitor_active"), false);
+
+    // >>> PRINTFARM: top-level Print Farm tab (queue + printer status). Always
+    // present; it shows a sign-in prompt until the user logs in to the farm.
+    m_print_farm = new PrintFarmPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    m_print_farm->SetBackgroundColour(*wxWHITE);
+    m_tabpanel->AddPage(m_print_farm, _L("Print Farm"), std::string("tab_printfarm_active"), std::string("tab_printfarm_active"), false);
+    // <<< PRINTFARM
 
     m_printer_view = new PrinterWebView(m_tabpanel);
     Bind(EVT_LOAD_PRINTER_URL, [this](LoadPrinterViewEvent &evt) {
@@ -2747,6 +2755,8 @@ void MainFrame::show_print_farm_login()
         this,
         [this, restore_ui]() { // on success: restore the app UI and surface the synced printers
             restore_ui();
+            if (m_print_farm)
+                m_print_farm->update_auth_view();
             if (m_plater) {
                 m_plater->sidebar().update_all_preset_comboboxes();
                 const std::string sync_err = PrintFarmManager::instance().last_sync_error();
@@ -2803,6 +2813,8 @@ void MainFrame::print_farm_logout()
     // Clear the in-memory session, then bring the in-app login page back so the
     // user lands on it again (no restart required).
     PrintFarmManager::instance().logout();
+    if (m_print_farm)
+        m_print_farm->update_auth_view();
     if (m_plater)
         m_plater->sidebar().update_all_preset_comboboxes();
     show_print_farm_login();

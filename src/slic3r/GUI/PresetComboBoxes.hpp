@@ -83,6 +83,8 @@ public:
     void add_farm_printers();
     // Index of the farm printer for a combo item, or -1 if it is not a farm item.
     int  farm_printer_index_at(int item) const;
+    // Solid-colour status swatch for a farm printer (green/blue/grey by status).
+    wxBitmap farm_status_bitmap(const std::string& status);
     // <<< PRINTFARM
 
     // BBS: ams
