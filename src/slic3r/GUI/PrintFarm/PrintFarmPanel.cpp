@@ -155,7 +155,9 @@ void PrintFarmPanel::build_ui()
     m_cards_area = new wxScrolledWindow(card, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
     m_cards_area->SetBackgroundColour(card->GetBackgroundColour());
     m_cards_area->SetScrollRate(0, FromDIP(10));
-    m_cards_sizer = new wxWrapSizer(wxHORIZONTAL);
+    // flags=0 (no wxEXTEND_LAST_ON_EACH_LINE): keep each card at its own width so a
+    // single/last card is not stretched to fill the row.
+    m_cards_sizer = new wxWrapSizer(wxHORIZONTAL, 0);
     m_cards_area->SetSizer(m_cards_sizer);
     dash_sizer->Add(m_cards_area, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, border);
 
