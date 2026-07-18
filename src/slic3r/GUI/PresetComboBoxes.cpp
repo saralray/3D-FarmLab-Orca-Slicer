@@ -1190,6 +1190,21 @@ void PlaterPresetComboBox::select_farm_printer(int farm_idx)
             this->SetSelection(m_first_farm_idx + (int) std::distance(m_farm_ids.begin(), it));
     });
 }
+
+// Refresh farm printer status every time the printer dropdown is opened: sync the
+// live status from the backend, then rebuild the items so the status dots/labels
+// are current. Runs before the popup is measured (see ComboBox::OnPopupOpening).
+// No-op for non-printer combos or when not signed in to the farm.
+void PlaterPresetComboBox::OnPopupOpening()
+{
+    if (m_type != Preset::TYPE_PRINTER)
+        return;
+    auto& mgr = Slic3r::GUI::PrintFarmManager::instance();
+    if (!mgr.is_logged_in())
+        return;
+    mgr.refresh_printers();
+    update();
+}
 // <<< PRINTFARM
 
 void PlaterPresetComboBox::update_badge_according_flag() {

@@ -186,6 +186,12 @@ void PrintFarmPanel::build_ui()
     m_send_btn->Enable(false);
     job_buttons->Add(m_send_btn, 0, wxRIGHT, FromDIP(8));
 
+    m_done_btn = new Button(card, _L("Mark done"));
+    m_done_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Window);
+    m_done_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_mark_done(); });
+    m_done_btn->Enable(false);
+    job_buttons->Add(m_done_btn, 0, wxRIGHT, FromDIP(8));
+
     m_cancel_btn = new Button(card, _L("Cancel job"));
     m_cancel_btn->SetStyle(ButtonStyle::Regular, ButtonType::Window);
     m_cancel_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_cancel_job(); });
@@ -326,9 +332,12 @@ void PrintFarmPanel::refresh_jobs()
         update_job_buttons();
         return;
     }
-    m_jobs_cache = jobs;
     long row = 0;
     for (const auto& j : jobs) {
+        // Only show active jobs; finished/printed jobs are hidden.
+        if (j.status == PfJobStatus::Completed)
+            continue;
+        m_jobs_cache.push_back(j);
         m_jobs->InsertItem(row, wxString::FromUTF8(j.name));
         m_jobs->SetItem(row, 1, wxString::FromUTF8(to_string(j.status)));
         m_jobs->SetItem(row, 2, wxString::FromUTF8(j.submitter));
@@ -341,16 +350,37 @@ void PrintFarmPanel::refresh_jobs()
 
 void PrintFarmPanel::update_job_buttons()
 {
-    if (!m_jobs || !m_send_btn || !m_cancel_btn)
+    if (!m_jobs || !m_send_btn || !m_cancel_btn || !m_done_btn)
         return;
     const long sel = m_jobs->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
     const bool has_sel = sel >= 0 && sel < static_cast<long>(m_jobs_cache.size());
     m_cancel_btn->Enable(has_sel);
+    m_done_btn->Enable(has_sel);
     const bool can_send = has_sel && m_jobs_cache[sel].has_file;
     m_send_btn->Enable(can_send);
     m_send_btn->SetToolTip(has_sel && !m_jobs_cache[sel].has_file
                                ? _L("This job has no downloadable file on the farm.")
                                : wxString());
+}
+
+void PrintFarmPanel::on_mark_done()
+{
+    const long sel = m_jobs->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    if (sel < 0 || sel >= static_cast<long>(m_jobs_cache.size())) {
+        set_status(_L("Select a job to mark done."), true);
+        return;
+    }
+    const PfJob job = m_jobs_cache[sel];
+    auto* client = PrintFarmManager::instance().client();
+    if (!client)
+        return;
+    PfResult res = client->mark_job_printed(job.id);
+    if (!res.ok) {
+        set_status(wxString::FromUTF8(res.error), true);
+        return;
+    }
+    set_status(wxString::Format(_L("Marked \"%s\" done."), wxString::FromUTF8(job.name)));
+    refresh_jobs();
 }
 
 void PrintFarmPanel::on_cancel_job()

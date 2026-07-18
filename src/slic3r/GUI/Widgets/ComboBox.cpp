@@ -257,6 +257,7 @@ void ComboBox::ForceDropdownOpen()
         return;
 
     if (!drop_down) {
+        OnPopupOpening(); // let subclasses refresh/rebuild items before measuring
         drop.need_sync = true;
         drop.messureSize();
         drop.autoPosition();
@@ -352,6 +353,7 @@ void ComboBox::mouseDown(wxMouseEvent &event)
     if (drop_down) {
         drop.Hide();
     } else if (drop.HasDismissLongTime()) {
+        OnPopupOpening(); // let subclasses refresh/rebuild items before measuring
         drop.autoPosition();
         drop_down = true;
         drop.Popup(&drop);
@@ -380,6 +382,7 @@ void ComboBox::keyDown(wxKeyEvent& event)
             if (drop_down) {
                 drop.DismissAndNotify();
             } else if (drop.HasDismissLongTime()) {
+                OnPopupOpening(); // let subclasses refresh/rebuild items before measuring
                 drop.autoPosition();
                 drop_down = true;
                 drop.Popup();
