@@ -61,6 +61,7 @@ private:
     void on_timer(wxTimerEvent& evt);
     void on_cancel_job();
     void on_send_to_prepare();
+    void on_mark_done();
     void update_job_buttons();
 
     wxWindow* make_printer_card(wxWindow* parent, const PfPrinter& p);
@@ -74,6 +75,7 @@ private:
     wxListCtrl*       m_jobs        = nullptr;
     wxStaticText*     m_status      = nullptr;
     Button*           m_send_btn    = nullptr;
+    Button*           m_done_btn    = nullptr;
     Button*           m_cancel_btn  = nullptr;
 
     wxTimer            m_timer;

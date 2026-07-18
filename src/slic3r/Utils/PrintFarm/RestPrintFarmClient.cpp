@@ -505,6 +505,31 @@ PfResult RestPrintFarmClient::cancel_job(const std::string& id)
     return result;
 }
 
+PfResult RestPrintFarmClient::mark_job_printed(const std::string& id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_session_cookie.empty())
+        return PfResult::failure("Not signed in.", 401);
+    if (id.empty())
+        return PfResult::failure("No job selected.");
+
+    PfResult result = PfResult::failure("Failed to mark the job done.");
+    auto http = Http::post(api_url("/api/queue/" + Http::url_encode(id) + "/printed"));
+    apply_tls(http);
+    apply_session(http);
+    http.timeout_max(20)
+        .on_complete([&](std::string, unsigned status) { result = PfResult::success(status); })
+        .on_error([&](std::string b, std::string error, unsigned status) {
+            std::string msg = http_error_message(b, error, status);
+            if (status == 401 || status == 403)
+                msg = "Not authorized to mark jobs done (staff access required).";
+            result = PfResult::failure(msg, status);
+        })
+        .perform_sync();
+    PF_LOG(info) << "mark_job_printed id=" << id << (result.ok ? " ok" : " failed");
+    return result;
+}
+
 PfResult RestPrintFarmClient::download_job(const std::string& id,
                                            const std::string& dest_path,
                                            const ProgressFn&  on_progress)

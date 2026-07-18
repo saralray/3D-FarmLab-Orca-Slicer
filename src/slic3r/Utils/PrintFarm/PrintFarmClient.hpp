@@ -130,6 +130,10 @@ public:
     // Cancel/remove a queued job (DELETE /api/queue/{id}).
     virtual PfResult cancel_job(const std::string& id) = 0;
 
+    // Mark a queued job as printed/done (POST /api/queue/{id}/printed, session
+    // credential; requires the operator/admin role on the backend).
+    virtual PfResult mark_job_printed(const std::string& id) = 0;
+
     // Download a queued job's stored model file to dest_path (session credential;
     // GET /api/queue/{id}/file). 404 when the job has no stored file, 403 when the
     // session lacks the staff role required to read it.
