@@ -421,7 +421,10 @@ jobs:
           ./build_linux.sh "$flags"
           ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/orca-slicer
           appimage=./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
-          mv -n ./build/OrcaSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
+          # build_appimage.sh names the file after SLIC3R_APP_NAME (this fork:
+          # "3D-FarmLab-Orca-Slicer"), so match that as the mv source. The
+          # destination/artifact names stay "OrcaSlicer_Linux_*" for downstream.
+          mv -n ./build/3D-FarmLab-Orca-Slicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
           chmod +x "$appimage"
           if $tests; then tar -cvpf build_tests.tar build/tests; fi
 
