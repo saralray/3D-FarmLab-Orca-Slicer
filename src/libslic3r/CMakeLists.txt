@@ -280,6 +280,7 @@ set(lisbslic3r_sources
     Layer.cpp
     Layer.hpp
     LayerRegion.cpp
+    LocalZOrderOptimizer.hpp
     libslic3r.cpp
     libslic3r.h
     Line.cpp

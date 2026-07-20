@@ -331,6 +331,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/MediaPlayCtrl.h
     GUI/MeshUtils.cpp
     GUI/MeshUtils.hpp
+    GUI/MixedFilamentDialog.cpp
+    GUI/MixedFilamentDialog.hpp
+    GUI/MixedFilamentAdapter.cpp
+    GUI/MixedFilamentAdapter.hpp
     GUI/ModelMall.cpp
     GUI/ModelMall.hpp
     GUI/MonitorBasePanel.cpp
