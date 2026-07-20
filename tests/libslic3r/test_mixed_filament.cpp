@@ -286,10 +286,15 @@ TEST_CASE("Mixed filament auto generation can be disabled without dropping custo
 {
     const std::vector<std::string> colors = {"#FF0000", "#00FF00", "#0000FF"};
 
-    MixedFilamentManager enabled_mgr;
-    enabled_mgr.auto_generate(colors);
-    REQUIRE(enabled_mgr.mixed_filaments().size() == 3);
-    const std::string serialized_auto_rows = enabled_mgr.serialize_custom_entries();
+    std::string serialized_auto_rows;
+    {
+        // Auto-generation is opt-in (default off), so enable it for this sub-check.
+        MixedAutoGenerateGuard enabled(true);
+        MixedFilamentManager enabled_mgr;
+        enabled_mgr.auto_generate(colors);
+        REQUIRE(enabled_mgr.mixed_filaments().size() == 3);
+        serialized_auto_rows = enabled_mgr.serialize_custom_entries();
+    }
 
     MixedAutoGenerateGuard guard(false);
 

@@ -19,7 +19,10 @@ namespace Slic3r {
 
 namespace {
 
-std::atomic_bool s_mixed_filament_auto_generate_enabled { true };
+// Default OFF: the application must never fabricate "suggested" pairwise mixed
+// filaments on its own — only colours the user explicitly adds are exposed.
+// Tests that exercise pairwise generation opt in via set_auto_generate_enabled(true).
+std::atomic_bool s_mixed_filament_auto_generate_enabled { false };
 
 } // namespace
 

@@ -539,6 +539,7 @@ struct Sidebar::priv
     wxScrolledWindow* m_panel_filament_content;
     // Snapmaker "Full Spectrum": minimal Mixed Filaments panel (title + add button + list).
     StaticBox*  m_panel_mixed_filaments_title   = nullptr;
+    Label*      m_mixed_filaments_label         = nullptr;
     wxPanel*    m_panel_mixed_filaments_content  = nullptr;
     wxBoxSizer* m_sizer_mixed_filaments_content  = nullptr;
     bool        m_mixed_filaments_collapsed      = false;
@@ -1620,8 +1621,9 @@ Sidebar::Sidebar(Plater *parent)
     : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(39 * wxGetApp().em_unit(), -1)), p(new priv(parent))
 {
     // In the GUI, mixed filaments only exist when the user explicitly adds a
-    // colour, so disable the auto-generated pairwise suggestions. (Tests keep
-    // the library default enabled.)
+    // colour, so keep the auto-generated pairwise suggestions disabled. This
+    // matches the library default (off); the explicit call guards against any
+    // earlier code having toggled it on in-process.
     MixedFilamentManager::set_auto_generate_enabled(false);
 
     Choice::register_dynamic_list("support_filament", &dynamic_filament_list);
@@ -2227,6 +2229,7 @@ Sidebar::Sidebar(Plater *parent)
         p->m_panel_mixed_filaments_title->SetBackgroundColor(title_bg);
         auto *mixed_icon  = new ScalableButton(p->m_panel_mixed_filaments_title, wxID_ANY, "filament");
         auto *mixed_label = new Label(p->m_panel_mixed_filaments_title, _L("Mixed Filaments"), LB_PROPAGATE_MOUSE_EVENT);
+        p->m_mixed_filaments_label = mixed_label;
         auto *mixed_add   = new Button(p->m_panel_mixed_filaments_title, _L("Add"));
         mixed_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
             if (!wxGetApp().preset_bundle) return;
@@ -2590,6 +2593,18 @@ void Sidebar::update_mixed_filament_panel(bool /*sync_manager*/)
     const bool content_visible = title_visible && !p->m_mixed_filaments_collapsed && custom_shown > 0;
     p->m_panel_mixed_filaments_title->Show(title_visible);
     p->m_panel_mixed_filaments_content->Show(content_visible);
+
+    // Show a caret so the collapse/expand affordance is discoverable, and only
+    // when there is actually a list to hide.
+    if (p->m_mixed_filaments_label) {
+        wxString caption = _L("Mixed Filaments");
+        if (custom_shown > 0)
+            caption = (p->m_mixed_filaments_collapsed ? wxString::FromUTF8("\xE2\x96\xB8 ")   // ▸
+                                                      : wxString::FromUTF8("\xE2\x96\xBE "))  // ▾
+                      + caption;
+        p->m_mixed_filaments_label->SetLabel(caption);
+    }
+
     p->m_panel_mixed_filaments_content->Layout();
     if (p->scrolled)
         p->scrolled->Layout();
@@ -3288,6 +3303,8 @@ void Sidebar::on_filament_count_change(size_t num_filaments)
     p->m_panel_filament_title->Refresh();
     update_ui_from_settings();
     update_dynamic_filament_list();
+    // Reveal/hide the Mixed Filaments panel as the physical filament count crosses 2.
+    update_mixed_filament_panel(false);
 }
 
 void Sidebar::on_filaments_delete(size_t filament_id)
@@ -3339,6 +3356,8 @@ void Sidebar::on_filaments_delete(size_t filament_id)
     p->m_panel_filament_title->Refresh();
     update_ui_from_settings();
     dynamic_filament_list.update();
+    // Reveal/hide the Mixed Filaments panel as the physical filament count crosses 2.
+    update_mixed_filament_panel(false);
 }
 
 void Sidebar::add_filament() {
