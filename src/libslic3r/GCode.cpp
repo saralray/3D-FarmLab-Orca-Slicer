@@ -4443,6 +4443,562 @@ std::string GCode::generate_skirt(const Print &print,
     return gcode;
 }
 
+// ===== Snapmaker "Full Spectrum": Local-Z / pointillisme g-code helpers =====
+static inline void apply_local_z_flow_height_override(ExtrusionPath& path, const double flow_height_override)
+{
+    if (flow_height_override <= EPSILON)
+        return;
+    if (path.height > EPSILON) {
+        const double ratio = flow_height_override / path.height;
+        path.mm3_per_mm *= ratio;
+    }
+    path.height = float(flow_height_override);
+}
+
+static inline void append_clipped_path(const ExtrusionPath& src_path,
+                                       const ExPolygons*    include_masks,
+                                       const ExPolygons*    exclude_masks,
+                                       const double         flow_height_override,
+                                       ExtrusionEntityCollection& dst)
+{
+    Polylines segments{src_path.polyline};
+    if (include_masks != nullptr && !include_masks->empty())
+        segments = intersection_pl(std::move(segments), *include_masks);
+    if (exclude_masks != nullptr && !exclude_masks->empty())
+        segments = diff_pl(std::move(segments), *exclude_masks);
+
+    for (Polyline& segment : segments) {
+        if (!segment.is_valid())
+            continue;
+        ExtrusionPath clipped(segment, src_path);
+        apply_local_z_flow_height_override(clipped, flow_height_override);
+        dst.append(std::move(clipped));
+    }
+}
+
+static inline ExPolygons local_z_compensate_masks(const ExPolygons& src_masks,
+                                                  const float       delta_scaled,
+                                                  const bool        fallback_to_source)
+{
+    if (src_masks.empty() || std::abs(delta_scaled) <= EPSILON)
+        return src_masks;
+
+    ExPolygons compensated = offset_ex(src_masks, delta_scaled);
+    if (!compensated.empty() && compensated.size() > 1)
+        compensated = union_ex(compensated);
+
+    if (compensated.empty() && fallback_to_source)
+        return src_masks;
+    return compensated;
+}
+
+struct LocalZPathHeightStats
+{
+    size_t count { 0 };
+    double min   { std::numeric_limits<double>::max() };
+    double max   { 0.0 };
+};
+
+static inline LocalZPathHeightStats collect_local_z_path_height_stats(const ExtrusionEntityCollection& source)
+{
+    LocalZPathHeightStats stats;
+    ExtrusionEntityCollection flattened = source.flatten(false);
+    for (const ExtrusionEntity* entity : flattened.entities) {
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
+            const double h = path->height;
+            ++stats.count;
+            stats.min = std::min(stats.min, h);
+            stats.max = std::max(stats.max, h);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& p : multipath->paths) {
+                const double h = p.height;
+                ++stats.count;
+                stats.min = std::min(stats.min, h);
+                stats.max = std::max(stats.max, h);
+            }
+        } else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& p : loop->paths) {
+                const double h = p.height;
+                ++stats.count;
+                stats.min = std::min(stats.min, h);
+                stats.max = std::max(stats.max, h);
+            }
+        }
+    }
+    if (stats.count == 0) {
+        stats.min = 0.;
+        stats.max = 0.;
+    }
+    return stats;
+}
+
+static inline Polylines collect_local_z_polylines(const ExtrusionEntityCollection& source)
+{
+    Polylines lines;
+    ExtrusionEntityCollection flattened = source.flatten(false);
+    for (const ExtrusionEntity* entity : flattened.entities) {
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
+            lines.emplace_back(path->polyline);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& p : multipath->paths)
+                lines.emplace_back(p.polyline);
+        } else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& p : loop->paths)
+                lines.emplace_back(p.polyline);
+        }
+    }
+    return lines;
+}
+
+static std::unique_ptr<ExtrusionEntityCollection> clip_extrusion_collection_for_local_z(
+    const ExtrusionEntityCollection& source,
+    const ExPolygons*                include_masks,
+    const ExPolygons*                exclude_masks,
+    const double                     flow_height_override)
+{
+    if (source.entities.empty())
+        return nullptr;
+
+    if ((include_masks == nullptr || include_masks->empty()) &&
+        (exclude_masks == nullptr || exclude_masks->empty()) &&
+        flow_height_override <= EPSILON) {
+        return std::make_unique<ExtrusionEntityCollection>(source);
+    }
+
+    auto out = std::make_unique<ExtrusionEntityCollection>();
+    out->no_sort = source.no_sort;
+
+    ExtrusionEntityCollection flattened = source.flatten(false);
+    for (const ExtrusionEntity* entity : flattened.entities) {
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
+            append_clipped_path(*path, include_masks, exclude_masks, flow_height_override, *out);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& path : multipath->paths)
+                append_clipped_path(path, include_masks, exclude_masks, flow_height_override, *out);
+        } else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& path : loop->paths)
+                append_clipped_path(path, include_masks, exclude_masks, flow_height_override, *out);
+        } else {
+            // Fallback for unknown entity subclasses: keep behavior unchanged for now.
+            if (include_masks == nullptr && exclude_masks == nullptr && flow_height_override <= EPSILON)
+                out->append(*entity);
+        }
+    }
+
+    if (out->entities.empty())
+        return nullptr;
+
+    return out;
+}
+
+static std::vector<unsigned int> decode_manual_pattern_sequence_for_gcode(const MixedFilament& mf, size_t num_physical)
+{
+    std::vector<unsigned int> sequence;
+    if (mf.manual_pattern.empty())
+        return sequence;
+    sequence.reserve(mf.manual_pattern.size());
+    for (const char token : mf.manual_pattern) {
+        unsigned int extruder_id = 0;
+        if (token == '1')
+            extruder_id = mf.component_a;
+        else if (token == '2')
+            extruder_id = mf.component_b;
+        else if (token >= '3' && token <= '9')
+            extruder_id = unsigned(token - '0');
+        if (extruder_id >= 1 && extruder_id <= num_physical)
+            sequence.emplace_back(extruder_id);
+    }
+    return sequence;
+}
+
+static std::vector<unsigned int> decode_gradient_component_ids_for_gcode(const MixedFilament& mf, size_t num_physical)
+{
+    std::vector<unsigned int> ids;
+    if (mf.gradient_component_ids.empty() || num_physical == 0)
+        return ids;
+    bool seen[10] = { false };
+    ids.reserve(mf.gradient_component_ids.size());
+    for (const char c : mf.gradient_component_ids) {
+        if (c < '1' || c > '9')
+            continue;
+        const unsigned int id = unsigned(c - '0');
+        if (id == 0 || id > num_physical || seen[id])
+            continue;
+        seen[id] = true;
+        ids.emplace_back(id);
+    }
+    return ids;
+}
+
+static std::vector<int> decode_gradient_component_weights_for_gcode(const MixedFilament& mf, size_t expected_components)
+{
+    std::vector<int> out;
+    if (mf.gradient_component_weights.empty() || expected_components == 0)
+        return out;
+    std::string token;
+    for (const char c : mf.gradient_component_weights) {
+        if (c >= '0' && c <= '9') {
+            token.push_back(c);
+            continue;
+        }
+        if (!token.empty()) {
+            out.emplace_back(std::max(0, std::atoi(token.c_str())));
+            token.clear();
+        }
+    }
+    if (!token.empty())
+        out.emplace_back(std::max(0, std::atoi(token.c_str())));
+    if (out.size() != expected_components)
+        return {};
+    return out;
+}
+
+static std::vector<unsigned int> build_weighted_gradient_sequence_for_gcode(const std::vector<unsigned int>& ids,
+                                                                            const std::vector<int>&          weights)
+{
+    if (ids.empty())
+        return {};
+
+    std::vector<unsigned int> filtered_ids;
+    std::vector<int>          counts;
+    filtered_ids.reserve(ids.size());
+    counts.reserve(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i) {
+        const int w = (i < weights.size()) ? std::max(0, weights[i]) : 0;
+        if (w <= 0)
+            continue;
+        filtered_ids.emplace_back(ids[i]);
+        counts.emplace_back(w);
+    }
+    if (filtered_ids.empty()) {
+        filtered_ids = ids;
+        counts.assign(ids.size(), 1);
+    }
+
+    int g = 0;
+    for (const int c : counts)
+        g = std::gcd(g, std::max(1, c));
+    if (g > 1) {
+        for (int &c : counts)
+            c = std::max(1, c / g);
+    }
+
+    int cycle = std::accumulate(counts.begin(), counts.end(), 0);
+    constexpr int k_max_cycle = 48;
+    if (cycle > k_max_cycle) {
+        const double scale = double(k_max_cycle) / double(cycle);
+        for (int &c : counts)
+            c = std::max(1, int(std::round(double(c) * scale)));
+        cycle = std::accumulate(counts.begin(), counts.end(), 0);
+        while (cycle > k_max_cycle) {
+            auto it = std::max_element(counts.begin(), counts.end());
+            if (it == counts.end() || *it <= 1)
+                break;
+            --(*it);
+            --cycle;
+        }
+    }
+    if (cycle <= 0)
+        return {};
+
+    std::vector<unsigned int> sequence;
+    sequence.reserve(size_t(cycle));
+    std::vector<int> emitted(counts.size(), 0);
+    for (int pos = 0; pos < cycle; ++pos) {
+        size_t best_idx = 0;
+        double best_score = -1e9;
+        for (size_t i = 0; i < counts.size(); ++i) {
+            const double target = double((pos + 1) * counts[i]) / double(cycle);
+            const double score = target - double(emitted[i]);
+            if (score > best_score) {
+                best_score = score;
+                best_idx = i;
+            }
+        }
+        ++emitted[best_idx];
+        sequence.emplace_back(filtered_ids[best_idx]);
+    }
+    return sequence;
+}
+
+static size_t unique_extruder_count_for_gcode(const std::vector<unsigned int>& sequence, size_t num_physical)
+{
+    if (sequence.empty() || num_physical == 0)
+        return 0;
+    std::vector<bool> seen(num_physical + 1, false);
+    size_t            unique = 0;
+    for (const unsigned int id : sequence) {
+        if (id == 0 || id > num_physical)
+            continue;
+        if (!seen[id]) {
+            seen[id] = true;
+            ++unique;
+        }
+    }
+    return unique;
+}
+
+static std::vector<unsigned int> pointillism_sequence_for_row_for_gcode(const MixedFilament& mf, size_t num_physical)
+{
+    if (!mf.enabled || num_physical == 0 || mf.distribution_mode != int(MixedFilament::SameLayerPointillisme))
+        return {};
+
+    if (!mf.manual_pattern.empty())
+        return decode_manual_pattern_sequence_for_gcode(mf, num_physical);
+
+    const std::vector<unsigned int> gradient_ids = decode_gradient_component_ids_for_gcode(mf, num_physical);
+    if (gradient_ids.size() >= 2) {
+        const std::vector<int> gradient_weights = decode_gradient_component_weights_for_gcode(mf, gradient_ids.size());
+        const std::vector<unsigned int> weighted =
+            build_weighted_gradient_sequence_for_gcode(gradient_ids,
+                gradient_weights.empty() ? std::vector<int>(gradient_ids.size(), 1) : gradient_weights);
+        if (!weighted.empty())
+            return weighted;
+    }
+
+    if (mf.component_a < 1 || mf.component_a > num_physical ||
+        mf.component_b < 1 || mf.component_b > num_physical ||
+        mf.component_a == mf.component_b)
+        return {};
+
+    int ratio_a = std::max(0, mf.ratio_a);
+    int ratio_b = std::max(0, mf.ratio_b);
+    if (ratio_a == 0 && ratio_b == 0)
+        ratio_a = 1;
+    if (ratio_a > 0 && ratio_b > 0) {
+        const int g = std::gcd(ratio_a, ratio_b);
+        if (g > 1) {
+            ratio_a /= g;
+            ratio_b /= g;
+        }
+    }
+
+    constexpr int k_max_cycle = 24;
+    if (ratio_a + ratio_b > k_max_cycle) {
+        const double scale = double(k_max_cycle) / double(ratio_a + ratio_b);
+        ratio_a = std::max(1, int(std::round(double(ratio_a) * scale)));
+        ratio_b = std::max(1, int(std::round(double(ratio_b) * scale)));
+    }
+
+    const int cycle = std::max(1, ratio_a + ratio_b);
+    std::vector<unsigned int> sequence;
+    sequence.reserve(size_t(cycle));
+    for (int pos = 0; pos < cycle; ++pos) {
+        const int b_before = (pos * ratio_b) / cycle;
+        const int b_after  = ((pos + 1) * ratio_b) / cycle;
+        sequence.emplace_back((b_after > b_before) ? mf.component_b : mf.component_a);
+    }
+
+    bool seen_a = false;
+    bool seen_b = false;
+    for (const unsigned int extruder_id : sequence) {
+        seen_a = seen_a || extruder_id == mf.component_a;
+        seen_b = seen_b || extruder_id == mf.component_b;
+        if (seen_a && seen_b)
+            break;
+    }
+    if (!seen_a || !seen_b)
+        return {};
+    return sequence;
+}
+
+static void split_polyline_by_length_for_pointillism(const Polyline& src,
+                                                     const double    split_length,
+                                                     Polylines&      out)
+{
+    out.clear();
+    if (!src.is_valid())
+        return;
+    if (split_length <= EPSILON) {
+        out.emplace_back(src);
+        return;
+    }
+
+    Polyline remainder = src;
+    size_t   guard     = 0;
+    while (remainder.is_valid() && remainder.points.size() >= 2 && ++guard < 200000) {
+        if (remainder.length() <= split_length + EPSILON) {
+            out.emplace_back(std::move(remainder));
+            break;
+        }
+        Polyline head;
+        Polyline tail;
+        if (!remainder.split_at_length(split_length, &head, &tail) || !head.is_valid()) {
+            out.emplace_back(std::move(remainder));
+            break;
+        }
+        out.emplace_back(std::move(head));
+        if (!tail.is_valid() || tail.points.size() < 2)
+            break;
+        remainder = std::move(tail);
+    }
+    if (out.empty())
+        out.emplace_back(src);
+}
+
+static bool trim_polyline_for_pointillism_gap(Polyline& src, const double trim_each_end)
+{
+    if (!src.is_valid())
+        return false;
+    if (trim_each_end <= EPSILON)
+        return true;
+
+    const double original_len = src.length();
+    if (original_len <= 2.0 * trim_each_end + EPSILON)
+        return false;
+
+    Polyline head;
+    Polyline tail;
+    if (!src.split_at_length(trim_each_end, &head, &tail) || !tail.is_valid() || tail.points.size() < 2)
+        return false;
+    src = std::move(tail);
+
+    const double keep_len = src.length() - trim_each_end;
+    if (keep_len <= EPSILON)
+        return false;
+    if (!src.split_at_length(keep_len, &head, &tail) || !head.is_valid() || head.points.size() < 2)
+        return false;
+    src = std::move(head);
+    return src.is_valid() && src.points.size() >= 2;
+}
+
+struct PointillismPathSplitStats
+{
+    size_t segment_count { 0 };
+    size_t bucket_count  { 0 };
+};
+
+// Sentinel used only in G-code generation to recognize pointillism path-domain
+// split segments. This lets us apply per-segment runtime guards without
+// affecting regular perimeter/infill paths.
+static constexpr int k_pointillism_path_inset_marker = -7777;
+
+static bool split_extrusion_collection_for_pointillism_paths(
+    const ExtrusionEntityCollection&                         source,
+    const std::vector<unsigned int>&                         sequence,
+    size_t                                                   num_physical,
+    const double                                             split_length_scaled,
+    const double                                             split_gap_scaled,
+    size_t                                                   sequence_phase,
+    std::vector<std::unique_ptr<ExtrusionEntityCollection>>& out_by_extruder,
+    PointillismPathSplitStats&                               out_stats)
+{
+    out_by_extruder.clear();
+    out_by_extruder.resize(num_physical);
+    out_stats = {};
+
+    if (source.entities.empty() || sequence.empty() || num_physical == 0 || split_length_scaled <= EPSILON)
+        return false;
+
+    unsigned int fallback_extruder = 0;
+    for (const unsigned int id : sequence) {
+        if (id >= 1 && id <= num_physical) {
+            fallback_extruder = id;
+            break;
+        }
+    }
+    if (fallback_extruder == 0)
+        return false;
+
+    size_t sequence_idx = sequence_phase % sequence.size();
+    auto append_piece = [&](unsigned int extruder_id, const ExtrusionPath& src_path, Polyline& piece) {
+        if (!piece.is_valid())
+            return;
+        if (extruder_id == 0 || extruder_id > num_physical)
+            extruder_id = fallback_extruder;
+        std::unique_ptr<ExtrusionEntityCollection>& dst = out_by_extruder[extruder_id - 1];
+        if (!dst) {
+            dst = std::make_unique<ExtrusionEntityCollection>();
+            dst->no_sort = source.no_sort;
+        }
+        ExtrusionPath out_path(piece, src_path);
+        out_path.inset_idx = k_pointillism_path_inset_marker;
+        dst->append(std::move(out_path));
+        ++out_stats.segment_count;
+    };
+
+    ExtrusionEntityCollection flattened = source.flatten(false);
+    for (const ExtrusionEntity* entity : flattened.entities) {
+        auto split_one_path = [&](const ExtrusionPath& path) {
+            Polylines pieces;
+            split_polyline_by_length_for_pointillism(path.polyline, split_length_scaled, pieces);
+            const double trim_each_end = std::max(0.0, split_gap_scaled * 0.5);
+            for (Polyline& piece : pieces) {
+                if (trim_each_end > EPSILON && !trim_polyline_for_pointillism_gap(piece, trim_each_end)) {
+                    ++sequence_idx;
+                    continue;
+                }
+                unsigned int extruder_id = sequence[sequence_idx % sequence.size()];
+                append_piece(extruder_id, path, piece);
+                ++sequence_idx;
+            }
+        };
+
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
+            split_one_path(*path);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& path : multipath->paths)
+                split_one_path(path);
+        } else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& path : loop->paths)
+                split_one_path(path);
+        }
+    }
+
+    for (const std::unique_ptr<ExtrusionEntityCollection>& bucket : out_by_extruder) {
+        if (bucket && !bucket->entities.empty())
+            ++out_stats.bucket_count;
+    }
+    return out_stats.segment_count > 0;
+}
+
+static bool split_extrusion_collection_for_multi_perimeter_pattern(
+    const ExtrusionEntityCollection&                         source,
+    const MixedFilamentManager&                              mixed_mgr,
+    unsigned int                                             mixed_filament_id,
+    size_t                                                   num_physical,
+    int                                                      layer_index,
+    std::vector<std::unique_ptr<ExtrusionEntityCollection>>& out_by_extruder,
+    size_t&                                                  out_bucket_count)
+{
+    out_by_extruder.clear();
+    out_by_extruder.resize(num_physical);
+    out_bucket_count = 0;
+
+    if (source.entities.empty() || num_physical == 0)
+        return false;
+
+    size_t split_entities = 0;
+    ExtrusionEntityCollection flattened = source.flatten(false);
+    for (const ExtrusionEntity* entity : flattened.entities) {
+        if (entity == nullptr)
+            continue;
+
+        int perimeter_index = entity->inset_idx;
+        if (perimeter_index < 0)
+            perimeter_index = entity->role() == erExternalPerimeter ? 0 : 1;
+
+        const unsigned int extruder_id = mixed_mgr.resolve_perimeter(
+            mixed_filament_id, num_physical, layer_index, perimeter_index);
+        if (extruder_id == 0 || extruder_id > num_physical)
+            continue;
+
+        std::unique_ptr<ExtrusionEntityCollection>& bucket = out_by_extruder[extruder_id - 1];
+        if (!bucket) {
+            bucket = std::make_unique<ExtrusionEntityCollection>();
+            bucket->no_sort = source.no_sort;
+        }
+        bucket->append(*entity);
+        ++split_entities;
+    }
+
+    for (const std::unique_ptr<ExtrusionEntityCollection>& bucket : out_by_extruder) {
+        if (bucket && !bucket->entities.empty())
+            ++out_bucket_count;
+    }
+    return split_entities > 0;
+}
+
 // In sequential mode, process_layer is called once per each object and its copy,
 // therefore layers will contain a single entry and single_object_instance_idx will point to the copy of the object.
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
