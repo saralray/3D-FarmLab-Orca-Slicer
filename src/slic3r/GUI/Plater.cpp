@@ -541,6 +541,7 @@ struct Sidebar::priv
     StaticBox*  m_panel_mixed_filaments_title   = nullptr;
     wxPanel*    m_panel_mixed_filaments_content  = nullptr;
     wxBoxSizer* m_sizer_mixed_filaments_content  = nullptr;
+    bool        m_mixed_filaments_collapsed      = false;
     wxScrolledWindow* m_scrolledWindow_filament_content;
     wxStaticLine* m_staticline2;
     wxPanel* m_panel_project_title;
@@ -1618,6 +1619,11 @@ void Sidebar::update_sync_ams_btn_enable(wxUpdateUIEvent &e)
 Sidebar::Sidebar(Plater *parent)
     : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(39 * wxGetApp().em_unit(), -1)), p(new priv(parent))
 {
+    // In the GUI, mixed filaments only exist when the user explicitly adds a
+    // colour, so disable the auto-generated pairwise suggestions. (Tests keep
+    // the library default enabled.)
+    MixedFilamentManager::set_auto_generate_enabled(false);
+
     Choice::register_dynamic_list("support_filament", &dynamic_filament_list);
     Choice::register_dynamic_list("support_interface_filament", &dynamic_filament_list);
     Choice::register_dynamic_list("outer_wall_filament_id", &dynamic_filament_list);
@@ -2260,6 +2266,14 @@ Sidebar::Sidebar(Plater *parent)
         h_mixed_title->SetMinSize(-1, 3 * em);
         p->m_panel_mixed_filaments_title->SetSizer(h_mixed_title);
         p->m_panel_mixed_filaments_title->Layout();
+        // Click the title bar (not the Add button) to collapse/expand the list.
+        auto toggle_mixed_collapse = [this](wxMouseEvent &e) {
+            p->m_mixed_filaments_collapsed = !p->m_mixed_filaments_collapsed;
+            update_mixed_filament_panel(false);
+            e.Skip();
+        };
+        p->m_panel_mixed_filaments_title->Bind(wxEVT_LEFT_UP, toggle_mixed_collapse);
+        mixed_label->Bind(wxEVT_LEFT_UP, toggle_mixed_collapse);
 
         p->m_panel_mixed_filaments_content = new wxPanel(p->scrolled, wxID_ANY);
         p->m_sizer_mixed_filaments_content = new wxBoxSizer(wxVERTICAL);
@@ -2527,32 +2541,55 @@ void Sidebar::update_mixed_filament_panel(bool /*sync_manager*/)
     wxWindowUpdateLocker noUpdates(p->m_panel_mixed_filaments_content);
     p->m_sizer_mixed_filaments_content->Clear(true);
 
-    const auto &mgr    = wxGetApp().preset_bundle->mixed_filaments;
-    const auto &colors = mgr.display_colors();
-    const auto &rows   = mgr.mixed_filaments();
+    auto &mgr = wxGetApp().preset_bundle->mixed_filaments;
+    const size_t num_physical = size_t(std::max(wxGetApp().filaments_cnt(), 0));
 
-    size_t shown = 0;
-    size_t color_idx = 0;
-    for (const auto &mf : rows) {
-        if (!mf.enabled)
+    // Show ONLY the mixed colours the user added (custom rows) — not the auto-
+    // generated pairwise suggestions.
+    size_t custom_shown = 0;
+    for (size_t i = 0; i < mgr.mixed_filaments().size(); ++i) {
+        const MixedFilament &mf = mgr.mixed_filaments()[i];
+        if (!mf.custom || mf.deleted || !mf.enabled)
             continue;
-        const std::string hex = (color_idx < colors.size()) ? colors[color_idx] : std::string("#26A69A");
-        ++color_idx;
+        const std::string hex = mf.display_color.empty() ? std::string("#26A69A") : mf.display_color;
         wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
         wxColour col; col.Set(from_u8(hex));
         auto *swatch = new wxPanel(p->m_panel_mixed_filaments_content, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(18), FromDIP(18)));
         swatch->SetBackgroundColour(col);
-        wxString label = wxString::Format("F%u + F%u", mf.component_a, mf.component_b);
+        wxString label = wxString::Format("F%u + F%u  %d%%", mf.component_a, mf.component_b, mf.mix_b_percent);
         auto *txt = new Label(p->m_panel_mixed_filaments_content, label, LB_PROPAGATE_MOUSE_EVENT);
+        auto *del = new Button(p->m_panel_mixed_filaments_content, _L("Delete"));
+        const uint64_t stable_id = mf.stable_id;
+        del->Bind(wxEVT_BUTTON, [this, stable_id](wxCommandEvent &) {
+            if (!wxGetApp().preset_bundle) return;
+            auto &m = wxGetApp().preset_bundle->mixed_filaments;
+            for (MixedFilament &row_mf : m.mixed_filaments())
+                if (row_mf.custom && row_mf.stable_id == stable_id) { row_mf.deleted = true; row_mf.enabled = false; break; }
+            const std::string serialized = m.serialize_custom_entries();
+            wxGetApp().preset_bundle->project_config.option<ConfigOptionString>("mixed_filament_definitions", true)->value = serialized;
+            if (auto *tab = wxGetApp().get_tab(Preset::TYPE_PRINT)) {
+                DynamicPrintConfig new_conf = *tab->get_config();
+                new_conf.set_key_value("mixed_filament_definitions", new ConfigOptionString(serialized));
+                tab->load_config(new_conf);
+            }
+            wxGetApp().preset_bundle->update_multi_material_filament_presets();
+            update_mixed_filament_panel(false);
+            if (wxGetApp().plater()) wxGetApp().plater()->update();
+        });
         row->Add(swatch, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
         row->Add(txt, 1, wxALIGN_CENTER);
+        row->Add(del, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
         p->m_sizer_mixed_filaments_content->Add(row, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(2));
-        ++shown;
+        ++custom_shown;
     }
 
-    const bool any = shown > 0;
-    p->m_panel_mixed_filaments_title->Show(any);
-    p->m_panel_mixed_filaments_content->Show(any);
+    // The title bar (with the Add button) is available whenever the printer has
+    // at least two filaments, so the user can always add a mixed colour. The
+    // content list is shown only when expanded and non-empty.
+    const bool title_visible   = num_physical >= 2;
+    const bool content_visible = title_visible && !p->m_mixed_filaments_collapsed && custom_shown > 0;
+    p->m_panel_mixed_filaments_title->Show(title_visible);
+    p->m_panel_mixed_filaments_content->Show(content_visible);
     p->m_panel_mixed_filaments_content->Layout();
     if (p->scrolled)
         p->scrolled->Layout();
