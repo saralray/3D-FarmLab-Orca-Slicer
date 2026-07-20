@@ -17,6 +17,10 @@ on:
           required: false
           type: boolean
           default: false
+        skip-external-tests:
+          required: false
+          type: boolean
+          default: false
 
 jobs:
   build_orca:
@@ -406,19 +410,44 @@ jobs:
         if: runner.os == 'Linux' && !vars.SELF_HOSTED
         uses: ./.github/actions/apt-install-deps
 
+      - name: Install ccache
+        if: runner.os == 'Linux' && !vars.SELF_HOSTED
+        shell: bash
+        run: |
+          sudo apt-get install -y -q ccache || { sudo apt-get update -q; sudo apt-get install -y -q ccache; }
+
+        # Persist the compiler cache across runs so incremental CI builds only
+        # recompile changed translation units. build_linux.sh auto-detects
+        # ccache on PATH and wires it in via CMAKE_C(XX)_COMPILER_LAUNCHER.
+      - name: Cache ccache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux${{ inputs.arch && format('-{0}', inputs.arch) || '' }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux${{ inputs.arch && format('-{0}', inputs.arch) || '' }}-${{ github.ref_name }}-
+            ccache-linux${{ inputs.arch && format('-{0}', inputs.arch) || '' }}-
+
         # Tests must built at the same time as the slicer;
         # if you untangle them feel free to separate them here too
       - name: Build slicer and tests
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          # Keep the compiler cache inside the workspace so actions/cache can
+          # persist it. -p disables precompiled headers, which build_linux.sh
+          # documents as the way to get reliable ccache hits.
+          export CCACHE_DIR=${{ github.workspace }}/.ccache
+          export CCACHE_MAXSIZE=1.5G
           # Build + tar the unit tests (-t) only on the leg that runs them: the
           # aarch64 leg by default (faster GitHub arm runner), or amd64 when using
           # self-hosted runners (no arm self-hosted server). unit_tests downloads
           # this tarball. The profile validator is built with -s, so amd64 keeps it.
           tests=${{ (!vars.SELF_HOSTED && inputs.arch == 'aarch64') || (vars.SELF_HOSTED && inputs.arch != 'aarch64') }}
-          if $tests; then flags=-istrlL; else flags=-isrlL; fi
+          if $tests; then flags=-istrlLp; else flags=-isrlLp; fi
           ./build_linux.sh "$flags"
+          command -v ccache >/dev/null && ccache -s || true
           ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/orca-slicer
           appimage=./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
           # build_appimage.sh names the file after SLIC3R_APP_NAME (this fork:
@@ -441,7 +470,7 @@ jobs:
           if-no-files-found: error
 
       - name: Run external slicer regression tests
-        if: runner.os == 'Linux' && inputs.arch != 'aarch64'
+        if: runner.os == 'Linux' && inputs.arch != 'aarch64' && !inputs.skip-external-tests
         timeout-minutes: 20
         shell: bash
         run: |
@@ -465,6 +494,9 @@ jobs:
         with:
           name: OrcaSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}${{ env.arch_suffix }}_${{ env.ver }}
           path: "./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage"
+          # The AppImage is already squashfs-compressed; re-gzipping it wastes
+          # minutes of CPU for ~0% size gain.
+          compression-level: 0
 
       - name: Upload OrcaSlicer_profile_validator Ubuntu
         if: ${{ ! env.ACT && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}

@@ -15,7 +15,11 @@ on:
       force-build:
         required: false
         type: boolean
-  
+      skip-external-tests:
+        required: false
+        type: boolean
+        default: false
+
 jobs:
   check_cache: # determines if there is a cache and outputs variables used in caching process
     name: Check Cache
@@ -63,4 +67,5 @@ jobs:
       arch: ${{ inputs.arch }}
       build-deps-only: ${{ inputs.build-deps-only }}
       force-build: ${{ inputs.force-build }}
+      skip-external-tests: ${{ inputs.skip-external-tests }}
     secrets: inherit
