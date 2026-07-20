@@ -4,6 +4,7 @@
 #include "Preset.hpp"
 #include "AppConfig.hpp"
 #include "enum_bitmask.hpp"
+#include "MixedFilament.hpp"
 
 #include <memory>
 #include <shared_mutex>
@@ -436,7 +437,22 @@ public:
 
     // Read out the number of extruders from an active printer preset,
     // update size and content of filament_presets.
-    void                        update_multi_material_filament_presets(size_t to_delete_filament_id = size_t(-1));
+    void                        update_multi_material_filament_presets(size_t to_delete_filament_id = size_t(-1),
+                                                                       size_t old_num_filaments_arg = size_t(-1));
+
+    // Snapmaker "Full Spectrum": virtual mixed (layer-mixed) filaments and the
+    // old->new virtual filament id remap produced when physical filaments change.
+    MixedFilamentManager        mixed_filaments;
+    void                        update_mixed_filament_id_remap(const std::vector<MixedFilament> &old_mixed,
+                                                               size_t old_num_filaments,
+                                                               size_t new_num_filaments);
+    const std::vector<unsigned int>& last_filament_id_remap() const { return m_last_filament_id_remap; }
+    std::vector<unsigned int>   consume_last_filament_id_remap()
+    {
+        std::vector<unsigned int> out = std::move(m_last_filament_id_remap);
+        m_last_filament_id_remap.clear();
+        return out;
+    }
 
     void                        on_extruders_count_changed(int extruder_count);
 
@@ -484,6 +500,13 @@ public:
     bool has_errors() const;
 
 private:
+    // Snapmaker "Full Spectrum": build old->new virtual filament id remap.
+    void                        build_filament_id_remap(const std::vector<MixedFilament> &old_mixed,
+                                                        size_t old_num_filaments,
+                                                        size_t new_num_filaments,
+                                                        bool deleting_filament,
+                                                        unsigned int deleted_1based);
+    std::vector<unsigned int>   m_last_filament_id_remap;
     //std::pair<PresetsConfigSubstitutions, std::string> load_system_presets(ForwardCompatibilitySubstitutionRule compatibility_rule);
     //BBS: add json related logic
     std::pair<PresetsConfigSubstitutions, std::string> load_system_presets_from_json(ForwardCompatibilitySubstitutionRule compatibility_rule);

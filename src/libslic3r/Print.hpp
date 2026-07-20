@@ -17,6 +17,7 @@
 #include "GCode/ThumbnailData.hpp"
 #include "GCode/GCodeProcessor.hpp"
 #include "MultiMaterialSegmentation.hpp"
+#include "MixedFilament.hpp"
 #include "libslic3r.h"
 
 #include <Eigen/Geometry>
@@ -52,6 +53,32 @@ struct groupedVolumeSlices
     int                     groupId = -1;
     std::vector<ObjectID>   volume_ids;
     ExPolygons              slices;
+};
+
+// Snapmaker "Full Spectrum": Local-Z dithering planner caches.
+struct LocalZInterval
+{
+    size_t layer_id { 0 };
+    double z_lo { 0.0 };
+    double z_hi { 0.0 };
+    double base_height { 0.0 };
+    double sublayer_height { 0.0 };
+    bool   has_mixed_paint { false };
+    size_t first_sublayer_idx { 0 };
+    size_t sublayer_count { 0 };
+};
+
+struct SubLayerPlan
+{
+    size_t layer_id { 0 };
+    size_t pass_index { 0 };
+    bool   split_interval { false };
+    double z_lo { 0.0 };
+    double z_hi { 0.0 };
+    double print_z { 0.0 };
+    double flow_height { 0.0 };
+    std::vector<ExPolygons> painted_masks_by_extruder;
+    ExPolygons              base_masks;
 };
 
 enum SupportNecessaryType {
@@ -399,6 +426,19 @@ public:
     SupportLayer* add_tree_support_layer(int id, coordf_t height, coordf_t print_z, coordf_t slice_z);
     std::shared_ptr<TreeSupportData> alloc_tree_support_preview_cache();
     void clear_tree_support_preview_cache() { m_tree_support_preview_cache.reset(); }
+    // Snapmaker "Full Spectrum": Local-Z dithering plan (empty unless enabled).
+    const std::vector<LocalZInterval>& local_z_intervals() const { return m_local_z_intervals; }
+    const std::vector<SubLayerPlan>&   local_z_sublayer_plan() const { return m_local_z_sublayer_plan; }
+    void set_local_z_plan(std::vector<LocalZInterval> intervals, std::vector<SubLayerPlan> sublayers)
+    {
+        m_local_z_intervals = std::move(intervals);
+        m_local_z_sublayer_plan = std::move(sublayers);
+    }
+    void clear_local_z_plan()
+    {
+        m_local_z_intervals.clear();
+        m_local_z_sublayer_plan.clear();
+    }
 
     size_t          support_layer_count() const { return m_support_layers.size(); }
     void            clear_support_layers();
@@ -557,6 +597,8 @@ private:
     SlicingParameters                       m_slicing_params;
     LayerPtrs                               m_layers;
     SupportLayerPtrs                        m_support_layers;
+    std::vector<LocalZInterval>             m_local_z_intervals;
+    std::vector<SubLayerPlan>               m_local_z_sublayer_plan;
     // BBS
     std::shared_ptr<TreeSupportData>        m_tree_support_preview_cache;
 
@@ -759,6 +801,8 @@ struct WipeTowerData
     // Depth of the wipe tower to pass to GLCanvas3D for exact bounding box:
     float                                                 depth;
     std::vector<std::pair<float, float>>                  z_and_depth_pairs;
+    // Snapmaker "Full Spectrum": per-layer reserved boxes for runtime Local-Z toolchanges.
+    std::vector<std::vector<WipeTower::box_coordinates>>  local_z_reserve_boxes;
     float                                                 brim_width;
     float                                                 height;
     BoundingBoxf                                          bbx;//including brim
@@ -771,6 +815,7 @@ struct WipeTowerData
         used_filament.clear();
         number_of_toolchanges = -1;
         depth = 0.f;
+        local_z_reserve_boxes.clear();
         brim_width = 0.f;
         rib_offset = Vec2f::Zero();
         wipe_tower_mesh_data  = std::nullopt;
@@ -948,6 +993,10 @@ public:
     const PrintConfig&          config() const { return m_config; }
     const PrintObjectConfig&    default_object_config() const { return m_default_object_config; }
     const PrintRegionConfig& default_region_config() const { return m_default_region_config; }
+    // Snapmaker "Full Spectrum": virtual mixed-filament manager, owned by Print,
+    // rebuilt from the "mixed_filament_definitions" print option on apply().
+    const MixedFilamentManager& mixed_filament_manager() const { return m_mixed_filament_mgr; }
+    MixedFilamentManager&       mixed_filament_manager()       { return m_mixed_filament_mgr; }
     ConstPrintObjectPtrsAdaptor objects() const { return ConstPrintObjectPtrsAdaptor(&m_objects); }
     PrintObject*                get_object(size_t idx) { return const_cast<PrintObject*>(m_objects[idx]); }
     const PrintObject*          get_object(size_t idx) const { return m_objects[idx]; }
@@ -1137,6 +1186,7 @@ private:
     PrintConfig                             m_config;
     PrintObjectConfig                       m_default_object_config;
     PrintRegionConfig                       m_default_region_config;
+    MixedFilamentManager                    m_mixed_filament_mgr;
     PrintObjectPtrs                         m_objects;
     PrintRegionPtrs                         m_print_regions;
     
