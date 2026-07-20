@@ -162,6 +162,8 @@ public:
     void init_filament_combo(PlaterPresetComboBox **combo, const int filament_idx);
     void remove_unused_filament_combos(const size_t current_extruder_count);
     void update_all_preset_comboboxes();
+    // Snapmaker "Full Spectrum": rebuild the Mixed Filaments sidebar list.
+    void update_mixed_filament_panel(bool sync_manager = true);
     //void update_partplate(PartPlateList& list);
     void update_presets(Slic3r::Preset::Type preset_type);
     //BBS
