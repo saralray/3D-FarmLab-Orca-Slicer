@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# A newer dispatch supersedes an in-flight one for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build_linux:
     name: Build Linux AppImage
@@ -43,9 +48,29 @@ jobs:
         run: |
           ./build_linux.sh -drlL
 
+      - name: Install ccache
+        run: |
+          sudo apt-get install -y -q ccache || { sudo apt-get update -q; sudo apt-get install -y -q ccache; }
+
+      # Shares the ccache key with build_orca.yml, so CI builds and release
+      # builds warm each other; only changed translation units recompile.
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-${{ github.ref_name }}-
+            ccache-linux-
+
       - name: Build slicer and AppImage
         run: |
-          ./build_linux.sh -isrlL
+          # -p disables precompiled headers for reliable ccache hits
+          # (see build_linux.sh usage text).
+          export CCACHE_DIR=${{ github.workspace }}/.ccache
+          export CCACHE_MAXSIZE=1.5G
+          ./build_linux.sh -isrlLp
+          ccache -s || true
 
       - name: Rename AppImage
         run: |
