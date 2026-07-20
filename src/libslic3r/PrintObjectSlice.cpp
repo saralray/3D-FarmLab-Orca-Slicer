@@ -3,6 +3,7 @@
 #include <tbb/parallel_for.h>
 
 #include "ClipperUtils.hpp"
+#include "SVG.hpp" // Snapmaker "Full Spectrum": Local-Z plan debug export
 #include "ElephantFootCompensation.hpp"
 #include "Exception.hpp"
 #include "I18N.hpp"
@@ -2403,7 +2404,7 @@ static bool apply_mixed_region_surface_offsets(PrintObject &print_object)
             if (layerm == nullptr || layerm->slices.empty())
                 continue;
 
-            const unsigned int filament_id = unsigned(std::max(0, layerm->region().config().wall_filament.value));
+            const unsigned int filament_id = unsigned(std::max(0, layerm->region().config().outer_wall_filament_id.value));
             if (!mixed_mgr.is_mixed(filament_id, num_physical))
                 continue;
 

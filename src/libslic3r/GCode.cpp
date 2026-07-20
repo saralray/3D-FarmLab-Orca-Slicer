@@ -1537,10 +1537,10 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
 
         const float layer_height = m_tool_changes[m_layer_idx].front().layer_height;
-        if (gcodegen.m_curr_print != nullptr && gcodegen.writer().extruder() != nullptr) {
+        if (gcodegen.m_curr_print != nullptr && gcodegen.writer().filament() != nullptr) {
             const Print&       print        = *gcodegen.m_curr_print;
             const PrintConfig& print_config = print.config();
-            const size_t       current_tool = gcodegen.writer().extruder()->id();
+            const size_t       current_tool = gcodegen.writer().filament()->id();
             std::vector<std::vector<float>> wipe_volumes = WipeTower2::extract_wipe_volumes(print_config);
 
             WipeTower2 local_z_wipe_tower(print_config,
@@ -1609,18 +1609,9 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         const Vec2f start_pos = transform_wt_pt(local_path.front());
         const Vec2f start_machine = start_pos + plate_origin_2d;
 
-        gcodegen.m_next_wipe_x = start_pos.x();
-        gcodegen.m_next_wipe_y = start_pos.y();
-
+        // Snapmaker "Full Spectrum": fork lacks m_next_wipe_x/y and z_hop_when_prime;
+        // just drop back to nominal Z before the runtime Local-Z toolchange.
         gcode += gcodegen.writer().unlift();
-
-        if (gcodegen.writer().extruder() != nullptr) {
-            auto type = ZHopType(gcodegen.m_config.z_hop_types.get_at(gcodegen.m_writer.extruder()->id()));
-            if (type == ZHopType::zhtAuto)
-                type = ZHopType::zhtSpiral;
-            if (gcodegen.m_config.z_hop_when_prime.get_at(gcodegen.m_writer.extruder()->id()))
-                gcode += gcodegen.retract(false, false, gcodegen.to_lift_type(type));
-        }
 
         gcodegen.m_avoid_crossing_perimeters.use_external_mp_once();
         gcode += gcodegen.travel_to(wipe_tower_point_to_object_point(gcodegen, start_machine), erMixed,
@@ -1670,7 +1661,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
 
         if (!is_approx(tower_z, current_z)) {
-            const Extruder *active_extruder = gcodegen.writer().extruder();
+            const Extruder *active_extruder = gcodegen.writer().filament();
             const bool can_wipe = active_extruder != nullptr &&
                                   gcodegen.config().wipe.get_at(active_extruder->id()) &&
                                   gcodegen.m_wipe.has_path() &&
@@ -4661,7 +4652,8 @@ static inline void append_clipped_path(const ExtrusionPath& src_path,
                                        const double         flow_height_override,
                                        ExtrusionEntityCollection& dst)
 {
-    Polylines segments{src_path.polyline};
+    // Snapmaker "Full Spectrum": fork ExtrusionPath stores a Polyline3; clip in 2D then rebuild.
+    Polylines segments{src_path.polyline.to_polyline()};
     if (include_masks != nullptr && !include_masks->empty())
         segments = intersection_pl(std::move(segments), *include_masks);
     if (exclude_masks != nullptr && !exclude_masks->empty())
@@ -4670,7 +4662,7 @@ static inline void append_clipped_path(const ExtrusionPath& src_path,
     for (Polyline& segment : segments) {
         if (!segment.is_valid())
             continue;
-        ExtrusionPath clipped(segment, src_path);
+        ExtrusionPath clipped(Polyline3(segment), src_path);
         apply_local_z_flow_height_override(clipped, flow_height_override);
         dst.append(std::move(clipped));
     }
@@ -4738,13 +4730,13 @@ static inline Polylines collect_local_z_polylines(const ExtrusionEntityCollectio
     ExtrusionEntityCollection flattened = source.flatten(false);
     for (const ExtrusionEntity* entity : flattened.entities) {
         if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity)) {
-            lines.emplace_back(path->polyline);
+            lines.emplace_back(path->polyline.to_polyline());
         } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
             for (const ExtrusionPath& p : multipath->paths)
-                lines.emplace_back(p.polyline);
+                lines.emplace_back(p.polyline.to_polyline());
         } else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
             for (const ExtrusionPath& p : loop->paths)
-                lines.emplace_back(p.polyline);
+                lines.emplace_back(p.polyline.to_polyline());
         }
     }
     return lines;
@@ -5111,7 +5103,7 @@ static bool split_extrusion_collection_for_pointillism_paths(
             dst = std::make_unique<ExtrusionEntityCollection>();
             dst->no_sort = source.no_sort;
         }
-        ExtrusionPath out_path(piece, src_path);
+        ExtrusionPath out_path(Polyline3(piece), src_path);
         out_path.inset_idx = k_pointillism_path_inset_marker;
         dst->append(std::move(out_path));
         ++out_stats.segment_count;
@@ -5121,7 +5113,7 @@ static bool split_extrusion_collection_for_pointillism_paths(
     for (const ExtrusionEntity* entity : flattened.entities) {
         auto split_one_path = [&](const ExtrusionPath& path) {
             Polylines pieces;
-            split_polyline_by_length_for_pointillism(path.polyline, split_length_scaled, pieces);
+            split_polyline_by_length_for_pointillism(path.polyline.to_polyline(), split_length_scaled, pieces);
             const double trim_each_end = std::max(0.0, split_gap_scaled * 0.5);
             for (Polyline& piece : pieces) {
                 if (trim_each_end > EPSILON && !trim_polyline_for_pointillism_gap(piece, trim_each_end)) {
@@ -6220,8 +6212,8 @@ LayerResult GCode::process_layer(
 
     if (!local_z_pass_refs.empty()) {
         const int local_z_phase_b_start_extruder =
-            (has_wipe_tower && m_writer.extruder() != nullptr) ? int(m_writer.extruder()->id()) : -1;
-        int  local_z_phase_b_active_extruder = (m_writer.extruder() != nullptr) ? int(m_writer.extruder()->id()) : -1;
+            (has_wipe_tower && m_writer.filament() != nullptr) ? int(m_writer.filament()->id()) : -1;
+        int  local_z_phase_b_active_extruder = (m_writer.filament() != nullptr) ? int(m_writer.filament()->id()) : -1;
         bool local_z_phase_b_changed_extruder = false;
         BOOST_LOG_TRIVIAL(info) << "Local-Z phase-b emitting"
                                 << " print_z=" << print_z
@@ -7772,7 +7764,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     }
 
     // Effective extrusion length per distance unit = (filament_flow_ratio/cross_section) * mm3_per_mm / print flow ratio
-    // m_writer.extruder()->e_per_mm3() below is (filament flow ratio / cross-sectional area)
+    // m_writer.filament()->e_per_mm3() below is (filament flow ratio / cross-sectional area)
     double e_per_mm = m_writer.filament()->e_per_mm3() * _mm3_per_mm;
     e_per_mm /= filament_flow_ratio;
 

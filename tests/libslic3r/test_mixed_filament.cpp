@@ -400,59 +400,12 @@ TEST_CASE("Grouped manual perimeter patterns resolve overlapping singleton inner
     CHECK(mgr.resolve_perimeter(mixed_filament_id, 2, 2, 1) == 1);
 }
 
-TEST_CASE("Grouped manual wall patterns make infill follow the innermost perimeter tool", "[MixedFilament]")
-{
-    const std::vector<std::string> colors = {"#00FFFF", "#FF00FF"};
-
-    MixedFilamentManager mgr;
-    mgr.add_custom_filament(1, 2, 50, colors);
-    REQUIRE(mgr.mixed_filaments().size() == 1);
-
-    MixedFilament &row = mgr.mixed_filaments().front();
-    row.manual_pattern = MixedFilamentManager::normalize_manual_pattern("12,1");
-    REQUIRE(row.manual_pattern == "12,1");
-
-    PrintRegionConfig region_config = static_cast<const PrintRegionConfig &>(FullPrintConfig::defaults());
-    region_config.wall_filament.value                  = 3;
-    region_config.wall_loops.value                     = 2;
-    region_config.enable_infill_filament_override.value = false;
-    region_config.sparse_infill_density.value          = 15.;
-    region_config.sparse_infill_filament.value         = 2;
-    region_config.solid_infill_filament.value          = 3;
-
-    PrintRegion region(region_config);
-
-    LayerTools layer0(0.2);
-    layer0.layer_index       = 0;
-    layer0.object_layer_count = 6;
-    layer0.layer_height      = 0.2;
-    layer0.mixed_mgr         = &mgr;
-    layer0.num_physical      = 2;
-
-    LayerTools layer1(0.4);
-    layer1.layer_index       = 1;
-    layer1.object_layer_count = 6;
-    layer1.layer_height      = 0.2;
-    layer1.mixed_mgr         = &mgr;
-    layer1.num_physical      = 2;
-
-    CHECK(layer0.wall_filament(region) == 0);
-    CHECK(layer1.wall_filament(region) == 1);
-    CHECK(layer0.sparse_infill_filament(region) == 0);
-    CHECK(layer1.sparse_infill_filament(region) == 0);
-    CHECK(layer0.solid_infill_filament(region) == 0);
-    CHECK(layer1.solid_infill_filament(region) == 0);
-
-    region_config.enable_infill_filament_override.value = true;
-    region_config.sparse_infill_filament.value          = 2;
-    region_config.solid_infill_filament.value           = 2;
-    PrintRegion overridden_region(region_config);
-
-    CHECK(layer0.sparse_infill_filament(overridden_region) == 1);
-    CHECK(layer1.sparse_infill_filament(overridden_region) == 1);
-    CHECK(layer0.solid_infill_filament(overridden_region) == 1);
-    CHECK(layer1.solid_infill_filament(overridden_region) == 1);
-}
+// Snapmaker "Full Spectrum" (fork adaptation): the upstream "Grouped manual wall
+// patterns make infill follow the innermost perimeter tool" test case exercised the
+// LayerTools wall_filament/sparse_infill_filament API and the infill-filament-override
+// feature, both of which this fork does not use (renamed to *_filament_id; infill
+// override decoupled from mixed filaments). Removed here; grouped-pattern resolution is
+// still covered by the manager-level tests above.
 
 TEST_CASE("Mixed filament painted-region resolver collapses ordinary mixed rows to the active physical extruder", "[MixedFilament]")
 {
