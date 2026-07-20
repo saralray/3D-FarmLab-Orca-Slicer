@@ -181,7 +181,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(ExtrusionPath &&rhs)
         : polyline(std::move(rhs.polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -194,7 +194,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(const Polyline3 &polyline, const ExtrusionPath &rhs)
         : polyline(polyline)
         , overhang_degree(rhs.overhang_degree)
@@ -207,7 +207,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { this->inset_idx = rhs.inset_idx; }
     ExtrusionPath(Polyline3 &&polyline, const ExtrusionPath &rhs)
         : polyline(std::move(polyline))
         , overhang_degree(rhs.overhang_degree)
@@ -220,7 +220,7 @@ public:
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
-    {}
+    { this->inset_idx = rhs.inset_idx; }
 
     ExtrusionPath& operator=(const ExtrusionPath& rhs) {
         m_can_reverse = rhs.m_can_reverse;
@@ -233,6 +233,7 @@ public:
         this->z_contoured = rhs.z_contoured;
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
+        this->inset_idx = rhs.inset_idx;
         this->polyline = rhs.polyline;
         return *this;
     }
@@ -247,6 +248,7 @@ public:
         this->z_contoured = rhs.z_contoured;
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
+        this->inset_idx = rhs.inset_idx;
         this->polyline = std::move(rhs.polyline);
         return *this;
     }
@@ -380,21 +382,23 @@ public:
     ExtrusionPaths paths;
 
     ExtrusionMultiPath() {}
-    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) {}
-    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) {}
+    ExtrusionMultiPath(const ExtrusionMultiPath &rhs) : paths(rhs.paths), m_can_reverse(rhs.m_can_reverse) { this->inset_idx = rhs.inset_idx; }
+    ExtrusionMultiPath(ExtrusionMultiPath &&rhs) : paths(std::move(rhs.paths)), m_can_reverse(rhs.m_can_reverse) { this->inset_idx = rhs.inset_idx; }
     ExtrusionMultiPath(const ExtrusionPaths &paths) : paths(paths) {}
-    ExtrusionMultiPath(const ExtrusionPath &path) {this->paths.push_back(path); m_can_reverse = path.can_reverse(); }
+    ExtrusionMultiPath(const ExtrusionPath &path) {this->paths.push_back(path); m_can_reverse = path.can_reverse(); this->inset_idx = path.inset_idx; }
 
     ExtrusionMultiPath &operator=(const ExtrusionMultiPath &rhs)
     {
         this->paths   = rhs.paths;
         m_can_reverse = rhs.m_can_reverse;
+        this->inset_idx = rhs.inset_idx;
         return *this;
     }
     ExtrusionMultiPath &operator=(ExtrusionMultiPath &&rhs)
     {
         this->paths   = std::move(rhs.paths);
         m_can_reverse = rhs.m_can_reverse;
+        this->inset_idx = rhs.inset_idx;
         return *this;
     }
 
@@ -450,9 +454,9 @@ public:
     ExtrusionLoop(const ExtrusionPaths &paths, ExtrusionLoopRole role = elrDefault) : paths(paths), m_loop_role(role) {}
     ExtrusionLoop(ExtrusionPaths &&paths, ExtrusionLoopRole role = elrDefault) : paths(std::move(paths)), m_loop_role(role) {}
     ExtrusionLoop(const ExtrusionPath &path, ExtrusionLoopRole role = elrDefault) : m_loop_role(role)
-        { this->paths.push_back(path); }
+        { this->paths.push_back(path); this->inset_idx = path.inset_idx; }
     ExtrusionLoop(const ExtrusionPath &&path, ExtrusionLoopRole role = elrDefault) : m_loop_role(role)
-        { this->paths.emplace_back(std::move(path)); }
+        { this->inset_idx = path.inset_idx; this->paths.emplace_back(std::move(path)); }
     bool is_loop() const override{ return true; }
     bool can_reverse() const override { return false; }
 	ExtrusionEntity* clone() const override{ return new ExtrusionLoop (*this); }
