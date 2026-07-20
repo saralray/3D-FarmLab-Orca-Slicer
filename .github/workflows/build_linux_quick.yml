@@ -1,0 +1,30 @@
+name: Build Linux Installer
+
+# Fast path for iterating on the Linux AppImage: builds ONLY the x64 Linux
+# installer through the same build_check_cache -> build_deps -> build_orca
+# chain as "Build all", so it reuses the same deps cache and produces the
+# same OrcaSlicer_Linux_ubuntu_2404_V* artifact — without spending runners
+# on Windows, macOS, aarch64, flatpak, or unit tests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-external-tests:
+        description: 'Also run the external slicer regression tests (slower)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_linux:
+    name: Linux x64 AppImage
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      # No arch: keeps the historical 'linux-clang' deps cache key, so this
+      # workflow shares the deps cache with "Build all".
+      os: ubuntu-24.04
+      skip-external-tests: ${{ !inputs.run-external-tests }}
+    secrets: inherit

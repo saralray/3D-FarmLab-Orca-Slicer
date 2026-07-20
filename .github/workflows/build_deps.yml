@@ -22,6 +22,10 @@ on:
       force-build:
         required: false
         type: boolean
+      skip-external-tests:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build_deps:
@@ -137,4 +141,5 @@ jobs:
       cache-path: ${{ inputs.cache-path }}
       os: ${{ inputs.os }}
       arch: ${{ inputs.arch }}
+      skip-external-tests: ${{ inputs.skip-external-tests }}
     secrets: inherit
