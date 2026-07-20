@@ -870,11 +870,343 @@ void PrintObject::slice()
     this->set_done(posSlice);
 }
 
+// ===== Snapmaker "Full Spectrum": mixed-filament segmentation post-processing =====
+// Gated: no-ops unless mixed (virtual) filaments are painted, so normal MMU
+// prints are unaffected.
+static bool bool_from_full_config(const DynamicPrintConfig &full_cfg, const char *key, bool fallback)
+{
+    if (!full_cfg.has(key))
+        return fallback;
+    if (const ConfigOptionBool *opt = full_cfg.option<ConfigOptionBool>(key))
+        return opt->value;
+    if (const ConfigOptionInt *opt = full_cfg.option<ConfigOptionInt>(key))
+        return opt->value != 0;
+    return fallback;
+}
+
+static coordf_t float_from_full_config(const DynamicPrintConfig &full_cfg, const char *key, coordf_t fallback)
+{
+    if (!full_cfg.has(key))
+        return fallback;
+    if (const ConfigOptionFloat *opt = full_cfg.option<ConfigOptionFloat>(key))
+        return coordf_t(opt->value);
+    return coordf_t(full_cfg.opt_float(key));
+}
+
+static inline unsigned int segmentation_channel_filament_id(size_t channel_idx)
+{
+    // MM segmentation reserves channel 0 for the parent/default region.
+    // All remaining channels already line up with the 1-based filament IDs.
+    return unsigned(channel_idx);
+}
+
+static float mixed_filament_reference_nozzle_mm(const MixedFilament &mixed_row, const ConfigOptionFloats &nozzle_diameters)
+{
+    std::vector<float> samples;
+    samples.reserve(2);
+
+    auto append_if_valid = [&samples, &nozzle_diameters](unsigned int component_id) {
+        if (component_id >= 1 && component_id <= nozzle_diameters.size())
+            samples.emplace_back(std::max(0.05f, float(nozzle_diameters.get_at(component_id - 1))));
+    };
+
+    append_if_valid(mixed_row.component_a);
+    append_if_valid(mixed_row.component_b);
+
+    if (samples.empty())
+        return 0.4f;
+    return std::accumulate(samples.begin(), samples.end(), 0.0f) / float(samples.size());
+}
+
+static coordf_t clamped_mixed_component_surface_offset(const MixedFilamentManager &mixed_mgr,
+                                                       const PrintConfig          &print_cfg,
+                                                       unsigned int                filament_id,
+                                                       size_t                      num_physical,
+                                                       int                         layer_index,
+                                                       float                       layer_print_z,
+                                                       float                       layer_height,
+                                                       bool                        force_height_weighted = false)
+{
+    const MixedFilament *mixed_row = mixed_mgr.mixed_filament_from_id(filament_id, num_physical);
+    if (mixed_row == nullptr)
+        return 0.f;
+
+    const coordf_t offset_mm = coordf_t(mixed_mgr.component_surface_offset(
+        filament_id,
+        num_physical,
+        layer_index,
+        layer_print_z,
+        layer_height,
+        force_height_weighted));
+    if (std::abs(offset_mm) <= EPSILON)
+        return 0.f;
+
+    const float reference_nozzle = mixed_filament_reference_nozzle_mm(*mixed_row, print_cfg.nozzle_diameter);
+    const coordf_t limit_mm = coordf_t(MixedFilamentManager::max_component_surface_offset_mm(reference_nozzle));
+    return std::clamp(offset_mm, -limit_mm, limit_mm);
+}
+
+static bool apply_mixed_surface_indentation(PrintObject &print_object, std::vector<std::vector<ExPolygons>> &segmentation)
+{
+    const Print *print = print_object.print();
+    if (print == nullptr || segmentation.empty())
+        return false;
+
+    const PrintConfig        &print_cfg = print->config();
+    const DynamicPrintConfig &full_cfg  = print->full_print_config();
+    coordf_t indentation_mm = float_from_full_config(full_cfg, "mixed_filament_surface_indentation",
+                                                     coordf_t(print_cfg.mixed_filament_surface_indentation.value));
+    indentation_mm = std::clamp(indentation_mm, coordf_t(-2.f), coordf_t(2.f));
+    if (std::abs(indentation_mm) <= EPSILON)
+        return false;
+
+    const size_t num_physical = print_cfg.filament_colour.size();
+    const size_t num_channels = segmentation.front().size();
+    if (num_channels <= num_physical)
+        return false;
+
+    const MixedFilamentManager &mixed_mgr = print->mixed_filament_manager();
+    const bool  expand_outward = indentation_mm < 0.f;
+    const float delta_scaled = float(scale_(std::abs(double(indentation_mm))));
+    if (delta_scaled <= float(EPSILON))
+        return false;
+
+    size_t changed_layers = 0;
+    size_t changed_states = 0;
+    size_t emptied_states = 0;
+    size_t overlap_clipped_states = 0;
+    size_t outside_trimmed_states = 0;
+
+    for (size_t layer_id = 0; layer_id < segmentation.size(); ++layer_id) {
+        if (segmentation[layer_id].size() != num_channels)
+            continue;
+
+        bool       layer_changed = false;
+        ExPolygons outside_trim_band;
+        ExPolygons occupied;
+        if (expand_outward) {
+            for (size_t channel_idx = 0; channel_idx < num_channels; ++channel_idx) {
+                const ExPolygons &state_masks = segmentation[layer_id][channel_idx];
+                if (state_masks.empty())
+                    continue;
+
+                const unsigned int state_id = unsigned(channel_idx + 1);
+                if (!mixed_mgr.is_mixed(state_id, num_physical))
+                    append(occupied, state_masks);
+            }
+            if (occupied.size() > 1)
+                occupied = union_ex(occupied);
+        } else {
+            ExPolygons layer_masks;
+            for (size_t channel_idx = 0; channel_idx < num_channels; ++channel_idx) {
+                const ExPolygons &state_masks = segmentation[layer_id][channel_idx];
+                if (!state_masks.empty())
+                    append(layer_masks, state_masks);
+            }
+            if (!layer_masks.empty()) {
+                if (layer_masks.size() > 1)
+                    layer_masks = union_ex(layer_masks);
+
+                ExPolygons layer_inner = offset_ex(layer_masks, -delta_scaled);
+                if (!layer_inner.empty() && layer_inner.size() > 1)
+                    layer_inner = union_ex(layer_inner);
+
+                outside_trim_band = layer_inner.empty() ? layer_masks : diff_ex(layer_masks, layer_inner, ApplySafetyOffset::Yes);
+                if (!outside_trim_band.empty() && outside_trim_band.size() > 1)
+                    outside_trim_band = union_ex(outside_trim_band);
+            }
+        }
+
+        for (size_t channel_idx = num_physical; channel_idx < num_channels; ++channel_idx) {
+            ExPolygons &state_masks = segmentation[layer_id][channel_idx];
+            if (state_masks.empty())
+                continue;
+
+            const unsigned int state_id = unsigned(channel_idx + 1);
+            if (!mixed_mgr.is_mixed(state_id, num_physical))
+                continue;
+
+            ExPolygons adjusted;
+            if (expand_outward) {
+                adjusted = offset_ex(state_masks, delta_scaled);
+                if (!adjusted.empty() && adjusted.size() > 1)
+                    adjusted = union_ex(adjusted);
+
+                if (!adjusted.empty() && !occupied.empty()) {
+                    ExPolygons clipped = diff_ex(adjusted, occupied, ApplySafetyOffset::Yes);
+                    if (std::abs(area(clipped)) + EPSILON < std::abs(area(adjusted)))
+                        ++overlap_clipped_states;
+                    adjusted = std::move(clipped);
+                    if (!adjusted.empty() && adjusted.size() > 1)
+                        adjusted = union_ex(adjusted);
+                }
+            } else {
+                adjusted = outside_trim_band.empty() ? state_masks : diff_ex(state_masks, outside_trim_band, ApplySafetyOffset::Yes);
+                if (std::abs(area(adjusted)) + EPSILON < std::abs(area(state_masks)))
+                    ++outside_trimmed_states;
+                if (!adjusted.empty() && adjusted.size() > 1)
+                    adjusted = union_ex(adjusted);
+            }
+
+            state_masks = std::move(adjusted);
+            if (state_masks.empty())
+                ++emptied_states;
+            ++changed_states;
+            layer_changed = true;
+
+            if (expand_outward && !state_masks.empty()) {
+                append(occupied, state_masks);
+                if (occupied.size() > 1)
+                    occupied = union_ex(occupied);
+            }
+        }
+
+        if (layer_changed)
+            ++changed_layers;
+    }
+
+    if (changed_states == 0)
+        return false;
+
+    BOOST_LOG_TRIVIAL(warning) << "Mixed surface indentation applied"
+                               << " object=" << (print_object.model_object() ? print_object.model_object()->name : std::string("<unknown>"))
+                               << " indentation_mm=" << indentation_mm
+                               << " direction=" << (expand_outward ? "outward" : "inward")
+                               << " changed_layers=" << changed_layers
+                               << " changed_states=" << changed_states
+                               << " emptied_states=" << emptied_states
+                               << " overlap_clipped_states=" << overlap_clipped_states
+                               << " outside_trimmed_states=" << outside_trimmed_states;
+    return true;
+}
+
+static bool apply_mixed_component_surface_offsets(PrintObject &print_object, std::vector<std::vector<ExPolygons>> &segmentation)
+{
+    const Print *print = print_object.print();
+    if (print == nullptr || segmentation.empty())
+        return false;
+
+    const PrintConfig        &print_cfg = print->config();
+    const DynamicPrintConfig &full_cfg  = print->full_print_config();
+    if (bool_from_full_config(full_cfg, "dithering_local_z_mode", print_cfg.dithering_local_z_mode.value))
+        return false;
+    if (!bool_from_full_config(full_cfg, "mixed_filament_component_bias_enabled", print_cfg.mixed_filament_component_bias_enabled.value))
+        return false;
+
+    const size_t num_physical = print_cfg.filament_colour.size();
+    const size_t num_channels = segmentation.front().size();
+    if (num_channels <= num_physical + 1)
+        return false;
+
+    const MixedFilamentManager &mixed_mgr = print->mixed_filament_manager();
+    bool has_component_offsets = false;
+    for (const MixedFilament &mf : mixed_mgr.mixed_filaments()) {
+        if (!mf.enabled || mf.deleted)
+            continue;
+        if (std::abs(mf.component_a_surface_offset) > EPSILON || std::abs(mf.component_b_surface_offset) > EPSILON) {
+            has_component_offsets = true;
+            break;
+        }
+    }
+    if (!has_component_offsets)
+        return false;
+
+    size_t changed_layers = 0;
+    size_t changed_states = 0;
+    size_t emptied_states = 0;
+    size_t expanded_states = 0;
+    size_t contracted_states = 0;
+
+    for (size_t layer_id = 0; layer_id < segmentation.size(); ++layer_id) {
+        if (segmentation[layer_id].size() != num_channels)
+            continue;
+
+        const Layer *layer = layer_id < size_t(print_object.layer_count()) ? print_object.get_layer(int(layer_id)) : nullptr;
+        const float layer_print_z = layer ? float(layer->print_z) : 0.f;
+        const float layer_height  = layer ? float(layer->height) : 0.f;
+        bool layer_changed = false;
+
+        for (size_t channel_idx = 1; channel_idx < num_channels; ++channel_idx) {
+            ExPolygons &state_masks = segmentation[layer_id][channel_idx];
+            if (state_masks.empty())
+                continue;
+
+            const unsigned int state_id = segmentation_channel_filament_id(channel_idx);
+            if (!mixed_mgr.is_mixed(state_id, num_physical))
+                continue;
+
+            const coordf_t offset_mm = clamped_mixed_component_surface_offset(mixed_mgr,
+                                                                              print_cfg,
+                                                                              state_id,
+                                                                              num_physical,
+                                                                              int(layer_id),
+                                                                              layer_print_z,
+                                                                              layer_height);
+            if (std::abs(offset_mm) <= EPSILON)
+                continue;
+
+            const float delta_scaled = float(scale_(std::abs(double(offset_mm))));
+            if (delta_scaled <= float(EPSILON))
+                continue;
+
+            ExPolygons adjusted = offset_mm > 0 ? offset_ex(state_masks, -delta_scaled) : offset_ex(state_masks, delta_scaled);
+            if (!adjusted.empty() && adjusted.size() > 1)
+                adjusted = union_ex(adjusted);
+
+            if (offset_mm < 0 && !adjusted.empty()) {
+                ExPolygons occupied_other;
+                for (size_t other_idx = 0; other_idx < num_channels; ++other_idx) {
+                    if (other_idx == channel_idx)
+                        continue;
+                    if (!segmentation[layer_id][other_idx].empty())
+                        append(occupied_other, segmentation[layer_id][other_idx]);
+                }
+                if (occupied_other.size() > 1)
+                    occupied_other = union_ex(occupied_other);
+                if (!occupied_other.empty()) {
+                    ExPolygons clipped = diff_ex(adjusted, occupied_other, ApplySafetyOffset::Yes);
+                    adjusted = std::move(clipped);
+                    if (!adjusted.empty() && adjusted.size() > 1)
+                        adjusted = union_ex(adjusted);
+                }
+            }
+
+            state_masks = std::move(adjusted);
+            if (state_masks.empty())
+                ++emptied_states;
+            if (offset_mm < 0)
+                ++expanded_states;
+            else
+                ++contracted_states;
+            ++changed_states;
+            layer_changed = true;
+        }
+
+        if (layer_changed)
+            ++changed_layers;
+    }
+
+    if (changed_states == 0)
+        return false;
+
+    BOOST_LOG_TRIVIAL(warning) << "Mixed component surface offsets applied"
+                               << " object=" << (print_object.model_object() ? print_object.model_object()->name : std::string("<unknown>"))
+                               << " changed_layers=" << changed_layers
+                               << " changed_states=" << changed_states
+                               << " contracted_states=" << contracted_states
+                               << " expanded_states=" << expanded_states
+                               << " emptied_states=" << emptied_states;
+    return true;
+}
+
 template<typename ThrowOnCancel>
 static inline void apply_mm_segmentation(PrintObject &print_object, ThrowOnCancel throw_on_cancel)
 {
     // Returns MM segmentation based on painting in MM segmentation gizmo
     std::vector<std::vector<ExPolygons>> segmentation = multi_material_segmentation_by_painting(print_object, throw_on_cancel);
+    // Snapmaker "Full Spectrum": apply surface indentation + component bias to painted mixed regions.
+    apply_mixed_surface_indentation(print_object, segmentation);
+    apply_mixed_component_surface_offsets(print_object, segmentation);
     assert(segmentation.size() == print_object.layer_count());
     tbb::parallel_for(
         tbb::blocked_range<size_t>(0, segmentation.size(), std::max(segmentation.size() / 128, size_t(1))),
