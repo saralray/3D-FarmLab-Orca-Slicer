@@ -82,7 +82,9 @@ public:
         const std::vector<WipeTower::ToolChangeResult>              &priming,
         const std::vector<std::vector<WipeTower::ToolChangeResult>> &tool_changes,
         const WipeTower::ToolChangeResult                           &final_purge,
-        const std::vector<unsigned int>                             &slice_used_filaments) :
+        const std::vector<unsigned int>                             &slice_used_filaments,
+        // Snapmaker "Full Spectrum": per-layer reserved Local-Z toolchange boxes.
+        const std::vector<std::vector<WipeTower::box_coordinates>>  &local_z_reserve_boxes = {}) :
         m_left(/*float(print_config.wipe_tower_x.value)*/ 0.f),
         m_right(float(/*print_config.wipe_tower_x.value +*/ print_config.prime_tower_width.value)),
         m_wipe_tower_pos(float(print_config.wipe_tower_x.get_at(plate_idx)), float(print_config.wipe_tower_y.get_at(plate_idx))),
@@ -98,7 +100,9 @@ public:
         m_enable_wrapping_detection(print_config.enable_wrapping_detection && (print_config.wrapping_exclude_area.values.size() > 2) && (slice_used_filaments.size() <= 1)),
         m_is_first_print(true),
         m_print_config(&print_config),
-        m_last_wipe_tower_print_z(print_config.z_offset.value)
+        m_last_wipe_tower_print_z(print_config.z_offset.value),
+        m_local_z_reserve_boxes(local_z_reserve_boxes),
+        m_local_z_reserve_slot_idx(local_z_reserve_boxes.size(), 0)
     {
         // initialize with the extruder offset of master extruder id
         m_extruder_offsets.resize(print_config.filament_map.size(), print_config.extruder_offset.get_at(print_config.master_extruder_id.value - 1));
@@ -108,8 +112,15 @@ public:
     }
 
     std::string prime(GCode &gcodegen);
-    void next_layer() { ++ m_layer_idx; m_tool_change_idx = 0; }
-    std::string tool_change(GCode &gcodegen, int extruder_id, bool finish_layer);
+    void next_layer() {
+        ++ m_layer_idx; m_tool_change_idx = 0;
+        if (m_layer_idx >= 0 && size_t(m_layer_idx) < m_local_z_reserve_slot_idx.size())
+            m_local_z_reserve_slot_idx[size_t(m_layer_idx)] = 0;
+    }
+    // Snapmaker "Full Spectrum": local_z_unplanned emits a runtime toolchange into a
+    // reserved Local-Z slot without consuming the preplanned tool-change sequence.
+    std::string tool_change(GCode &gcodegen, int extruder_id, bool finish_layer, bool local_z_unplanned = false,
+                            double local_z_nominal_layer_z = -1.);
     bool is_empty_wipe_tower_gcode(GCode &gcodegen, int extruder_id, bool finish_layer);
     std::string finalize(GCode &gcodegen);
     std::vector<float> used_filament_length() const;
@@ -144,6 +155,9 @@ private:
     // Current layer index.
     int                                                          m_layer_idx;
     int                                                          m_tool_change_idx;
+    // Snapmaker "Full Spectrum": reserved Local-Z toolchange boxes + per-layer slot cursor.
+    const std::vector<std::vector<WipeTower::box_coordinates>>   m_local_z_reserve_boxes;
+    std::vector<size_t>                                          m_local_z_reserve_slot_idx;
     double                                                       m_last_wipe_tower_print_z;
 
     // BBS
