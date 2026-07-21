@@ -35,9 +35,19 @@ static PrinterTechnology printer_technology()
     return wxGetApp().preset_bundle->printers.get_selected_preset().printer_technology();
 }
 
+static int physical_filaments_count()
+{
+    return std::max(wxGetApp().filaments_cnt(), 0);
+}
+
 static int filaments_count()
 {
-    return wxGetApp().filaments_cnt();
+    // Snapmaker "Full Spectrum": include enabled mixed (virtual) filaments so
+    // the "Change filament" menu exposes user-added mixed colours.
+    if (wxGetApp().preset_bundle == nullptr)
+        return wxGetApp().filaments_cnt();
+    const auto &mixed_mgr = wxGetApp().preset_bundle->mixed_filaments;
+    return static_cast<int>(mixed_mgr.total_filaments(size_t(physical_filaments_count())));
 }
 
 static bool is_improper_category(const std::string& category, const int filaments_cnt, const bool is_object_settings = true)
@@ -1062,11 +1072,16 @@ void MenuFactory::append_menu_item_change_extruder(wxMenu* menu)
         wxString item_name = _L("Default");
 
         if (i > 0) {
-            auto preset = wxGetApp().preset_bundle->filaments.find_preset(wxGetApp().preset_bundle->filament_presets[i - 1]);
-            if (preset == nullptr) {
-                item_name = wxString::Format(_L("Filament %d"), i);
+            if (i > physical_filaments_count()) {
+                // Virtual mixed (Full Spectrum) filament: no physical preset.
+                item_name = wxString::Format(_L("Mixed Filament %d"), i);
             } else {
-                item_name = from_u8(preset->label(false));
+                auto preset = wxGetApp().preset_bundle->filaments.find_preset(wxGetApp().preset_bundle->filament_presets[i - 1]);
+                if (preset == nullptr) {
+                    item_name = wxString::Format(_L("Filament %d"), i);
+                } else {
+                    item_name = from_u8(preset->label(false));
+                }
             }
         }
 
@@ -2260,11 +2275,16 @@ void MenuFactory::append_menu_item_change_filament(wxMenu* menu)
         wxString item_name = _L("Default");
 
         if (i > 0) {
-            auto preset = wxGetApp().preset_bundle->filaments.find_preset(wxGetApp().preset_bundle->filament_presets[i - 1]);
-            if (preset == nullptr) {
-                item_name = wxString::Format(_L("Filament %d"), i);
+            if (i > physical_filaments_count()) {
+                // Virtual mixed (Full Spectrum) filament: no physical preset.
+                item_name = wxString::Format(_L("Mixed Filament %d"), i);
             } else {
-                item_name = from_u8(preset->label(false));
+                auto preset = wxGetApp().preset_bundle->filaments.find_preset(wxGetApp().preset_bundle->filament_presets[i - 1]);
+                if (preset == nullptr) {
+                    item_name = wxString::Format(_L("Filament %d"), i);
+                } else {
+                    item_name = from_u8(preset->label(false));
+                }
             }
         }
 
@@ -2272,8 +2292,9 @@ void MenuFactory::append_menu_item_change_filament(wxMenu* menu)
             item_name << " (" + _L("current") + ")";
         }
 
+        const bool has_icon = i > 0 && size_t(i - 1) < icons.size();
         append_menu_item(extruder_selection_menu, wxID_ANY, item_name, "",
-            [i](wxCommandEvent&) { obj_list()->set_extruder_for_selected_items(i); }, i == 0 ? wxNullBitmap : *icons[i - 1], menu,
+            [i](wxCommandEvent&) { obj_list()->set_extruder_for_selected_items(i); }, has_icon ? *icons[i - 1] : wxNullBitmap, menu,
             [is_active_extruder]() { return !is_active_extruder; }, m_parent);
     }
     menu->Append(wxID_ANY, name, extruder_selection_menu, _L("Change Filament"));

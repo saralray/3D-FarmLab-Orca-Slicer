@@ -10,6 +10,7 @@
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "GUI_ObjectList.hpp"
+#include "libslic3r/PresetBundle.hpp"
 #include "I18N.hpp"
 #include "GUI_Utils.hpp"
 #include "Plater.hpp"
@@ -560,6 +561,15 @@ std::vector<wxBitmap*> get_extruder_color_icons(bool thin_icon/* = false*/)
                 bmps.push_back(get_extruder_color_icon(colors[0], label, icon_width, icon_height));
             } else {
                 bmps.push_back(get_extruder_color_icon(colors, is_gradient, label, icon_width, icon_height));
+            }
+        }
+        // Snapmaker "Full Spectrum": append icons for enabled mixed (virtual)
+        // filaments so they show their blended colour in filament pickers. The
+        // multi-colour render info above only covers physical filaments.
+        if (Slic3r::GUI::wxGetApp().preset_bundle != nullptr) {
+            for (const std::string &mixed_color : Slic3r::GUI::wxGetApp().preset_bundle->mixed_filaments.display_colors()) {
+                auto label = std::to_string(++index);
+                bmps.push_back(get_extruder_color_icon(mixed_color, label, icon_width, icon_height));
             }
         }
     } else {

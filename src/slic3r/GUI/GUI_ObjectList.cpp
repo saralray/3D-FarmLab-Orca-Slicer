@@ -75,9 +75,19 @@ static DynamicPrintConfig& printer_config()
     return wxGetApp().preset_bundle->printers.get_edited_preset().config;
 }
 
+// Snapmaker "Full Spectrum": total = physical extruders + enabled mixed
+// (virtual) filaments, so object filament assignment UI and the filament
+// column expose the user-added mixed colours as selectable entries.
+static size_t total_filaments_count(size_t physical_count)
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return physical_count;
+    return wxGetApp().preset_bundle->mixed_filaments.total_filaments(physical_count);
+}
+
 static int filaments_count()
 {
-    return wxGetApp().filaments_cnt();
+    return static_cast<int>(total_filaments_count(size_t(std::max(wxGetApp().filaments_cnt(), 0))));
 }
 
 static void take_snapshot(const std::string& snapshot_name)
