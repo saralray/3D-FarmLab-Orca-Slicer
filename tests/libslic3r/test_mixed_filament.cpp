@@ -69,6 +69,8 @@ struct MixedAutoGenerateGuard
 
 TEST_CASE("Mixed filament remap follows stable row ids when same-pair rows reorder", "[MixedFilament]")
 {
+    // This test seeds rows via auto-generation, which is opt-in (default off).
+    MixedAutoGenerateGuard enabled(true);
     PresetBundle bundle;
     bundle.filament_presets = {"Default Filament", "Default Filament"};
     bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values = {"#FF0000", "#0000FF"};
@@ -119,6 +121,8 @@ TEST_CASE("Mixed filament remap follows stable row ids when same-pair rows reord
 
 TEST_CASE("Mixed filament remap keeps later painted colors stable when an earlier mixed row is deleted", "[MixedFilament]")
 {
+    // This test seeds rows via auto-generation, which is opt-in (default off).
+    MixedAutoGenerateGuard enabled(true);
     PresetBundle bundle;
     bundle.filament_presets = {"Default Filament", "Default Filament", "Default Filament", "Default Filament"};
     bundle.project_config.option<ConfigOptionStrings>("filament_colour")->values = {"#FF0000", "#00FF00", "#0000FF", "#FFFF00"};
