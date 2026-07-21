@@ -24,6 +24,7 @@
 #include "Jobs/SendJob.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PrintBase.hpp"
+#include "libslic3r/MixedFilament.hpp" // Snapmaker "Full Spectrum": MixedFilament type for Sidebar mixed-panel API
 
 #include "libslic3r/calib.hpp"
 #include "libslic3r/CutUtils.hpp"
@@ -164,6 +165,11 @@ public:
     void update_all_preset_comboboxes();
     // Snapmaker "Full Spectrum": rebuild the Mixed Filaments sidebar list.
     void update_mixed_filament_panel(bool sync_manager = true);
+    void apply_mixed_entry_changes(size_t mixed_id,
+                                   const MixedFilament &updated_mf,
+                                   bool preserve_enabled = false,
+                                   bool rebuild_virtual_id_remap = false);
+    std::vector<unsigned int> get_ui_ordered_filament_ids() const;
     //void update_partplate(PartPlateList& list);
     void update_presets(Slic3r::Preset::Type preset_type);
     //BBS
