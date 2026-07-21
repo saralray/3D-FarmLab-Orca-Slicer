@@ -436,16 +436,18 @@ jobs:
         shell: bash
         run: |
           # Keep the compiler cache inside the workspace so actions/cache can
-          # persist it. -p disables precompiled headers, which build_linux.sh
-          # documents as the way to get reliable ccache hits.
+          # persist it. Keep precompiled headers ON (they are load-bearing:
+          # some sources rely on headers the PCH pulls in), and let ccache
+          # cache PCH-based compiles via the standard PCH sloppiness set.
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export CCACHE_MAXSIZE=1.5G
+          export CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime
           # Build + tar the unit tests (-t) only on the leg that runs them: the
           # aarch64 leg by default (faster GitHub arm runner), or amd64 when using
           # self-hosted runners (no arm self-hosted server). unit_tests downloads
           # this tarball. The profile validator is built with -s, so amd64 keeps it.
           tests=${{ (!vars.SELF_HOSTED && inputs.arch == 'aarch64') || (vars.SELF_HOSTED && inputs.arch != 'aarch64') }}
-          if $tests; then flags=-istrlLp; else flags=-isrlLp; fi
+          if $tests; then flags=-istrlL; else flags=-isrlL; fi
           ./build_linux.sh "$flags"
           command -v ccache >/dev/null && ccache -s || true
           ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/orca-slicer

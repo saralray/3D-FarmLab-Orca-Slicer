@@ -65,11 +65,12 @@ jobs:
 
       - name: Build slicer and AppImage
         run: |
-          # -p disables precompiled headers for reliable ccache hits
-          # (see build_linux.sh usage text).
+          # Keep precompiled headers ON (some sources rely on headers the PCH
+          # pulls in); let ccache cache PCH-based compiles via PCH sloppiness.
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export CCACHE_MAXSIZE=1.5G
-          ./build_linux.sh -isrlLp
+          export CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime
+          ./build_linux.sh -isrlL
           ccache -s || true
 
       - name: Rename AppImage
