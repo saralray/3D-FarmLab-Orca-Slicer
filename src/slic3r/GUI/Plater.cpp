@@ -1649,6 +1649,25 @@ void Sidebar::update_sync_ams_btn_enable(wxUpdateUIEvent &e)
      }
  }
 
+// Snapmaker "Full Spectrum": recipe type + prompt fwd-decl (used by the
+// Sidebar mixed panel below; full definitions in the mixed GUI block later).
+struct MixedColorMatchRecipeResult
+{
+    bool        cancelled     = false;
+    bool        valid         = false;
+    unsigned int component_a  = 1;
+    unsigned int component_b  = 2;
+    int         mix_b_percent = 50;
+    std::string manual_pattern;
+    std::string gradient_component_ids;
+    std::string gradient_component_weights;
+    wxColour    preview_color = wxColour("#26A69A");
+    double      delta_e       = std::numeric_limits<double>::infinity();
+};
+MixedColorMatchRecipeResult prompt_best_color_match_recipe(wxWindow *parent,
+                                                           const std::vector<std::string> &physical_colors,
+                                                           const wxColour &initial_color);
+
 Sidebar::Sidebar(Plater *parent)
     : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(39 * wxGetApp().em_unit(), -1)), p(new priv(parent))
 {
@@ -2536,7 +2555,7 @@ Sidebar::Sidebar(Plater *parent)
         if (wxGetApp().plater())
             wxGetApp().plater()->update_project_dirty_from_presets();
         p->m_skip_mixed_filament_sync_once = true;
-        wxGetApp().plater()->on_filaments_change(num_physical);
+        wxGetApp().plater()->on_filament_count_change(num_physical);
     });
 
     // Add to scrolled sizer
@@ -2805,19 +2824,6 @@ void Sidebar::remove_unused_filament_combos(const size_t current_extruder_count)
 // ===== Snapmaker "Full Spectrum" mixed-filament GUI (ported 1:1 from
 // Snapmaker/OrcaSlicer feature_mix_filament). Self-contained: uses only
 // MixedFilamentManager statics + wx. Wired into Sidebar below. =====
-struct MixedColorMatchRecipeResult
-{
-    bool        cancelled     = false;
-    bool        valid         = false;
-    unsigned int component_a  = 1;
-    unsigned int component_b  = 2;
-    int         mix_b_percent = 50;
-    std::string manual_pattern;
-    std::string gradient_component_ids;
-    std::string gradient_component_weights;
-    wxColour    preview_color = wxColour("#26A69A");
-    double      delta_e       = std::numeric_limits<double>::infinity();
-};
 
 namespace {
 wxColour parse_mixed_color(const std::string &value)
@@ -7302,7 +7308,7 @@ void Sidebar::apply_mixed_entry_changes(size_t mixed_id,
 
     if (rebuild_virtual_id_remap && wxGetApp().plater()) {
         p->m_skip_mixed_filament_sync_once = true;
-        wxGetApp().plater()->on_filaments_change(num_physical);
+        wxGetApp().plater()->on_filament_count_change(num_physical);
     }
 }
 
@@ -8132,7 +8138,7 @@ void Sidebar::update_mixed_filament_panel(bool sync_manager)
                 notify_mixed_change();
                 wxGetApp().plater()->update_project_dirty_from_presets();
                 p->m_skip_mixed_filament_sync_once = true;
-                wxGetApp().plater()->on_filaments_change(num_physical);
+                wxGetApp().plater()->on_filament_count_change(num_physical);
             });
 
             // Hover effect
@@ -8321,7 +8327,7 @@ void Sidebar::update_mixed_filament_panel(bool sync_manager)
                          wxGetApp().plater()->update_project_dirty_from_presets();
                      if (wxGetApp().plater()) {
                          p->m_skip_mixed_filament_sync_once = true;
-                         wxGetApp().plater()->on_filaments_change(num_physical);
+                         wxGetApp().plater()->on_filament_count_change(num_physical);
                      }
                  }
              }
