@@ -99,6 +99,8 @@
 #include "Camera.hpp"
 #include "Mouse3DController.hpp"
 #include "Tab.hpp"
+#include "MixedFilamentDialog.hpp"
+#include "MixedFilamentAdapter.hpp"
 #include "Jobs/OrientJob.hpp"
 #include "Jobs/ArrangeJob.hpp"
 #include "Jobs/FillBedJob.hpp"
@@ -535,6 +537,10 @@ struct Sidebar::priv
     ScalableButton *  m_bpButton_set_filament;
     int m_menu_filament_id = -1;
     wxScrolledWindow* m_panel_filament_content;
+    // Snapmaker "Full Spectrum": minimal Mixed Filaments panel (title + add button + list).
+    StaticBox*  m_panel_mixed_filaments_title   = nullptr;
+    wxPanel*    m_panel_mixed_filaments_content  = nullptr;
+    wxBoxSizer* m_sizer_mixed_filaments_content  = nullptr;
     wxScrolledWindow* m_scrolledWindow_filament_content;
     wxStaticLine* m_staticline2;
     wxPanel* m_panel_project_title;
@@ -2205,6 +2211,66 @@ Sidebar::Sidebar(Plater *parent)
     scrolled_sizer->Add(p->m_panel_filament_content, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(SidebarProps::ContentMarginV())); // ORCA use vertical margin on parent otherwise it shows scrollbar even on 1 filament
     }
 
+    // Snapmaker "Full Spectrum": minimal "Mixed Filaments" panel. A title bar with
+    // an "Add" button opens the ported MixedFilamentDialog to define a virtual
+    // mixed filament; the content lists enabled mixed filaments. Hidden until the
+    // user adds one, so the sidebar is unchanged for existing projects.
+    {
+        wxColour title_bg = wxGetApp().dark_mode() ? wxColour(45, 45, 49) : wxColour(0xF8F8F8);
+        p->m_panel_mixed_filaments_title = new StaticBox(p->scrolled, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_NONE);
+        p->m_panel_mixed_filaments_title->SetBackgroundColor(title_bg);
+        auto *mixed_icon  = new ScalableButton(p->m_panel_mixed_filaments_title, wxID_ANY, "filament");
+        auto *mixed_label = new Label(p->m_panel_mixed_filaments_title, _L("Mixed Filaments"), LB_PROPAGATE_MOUSE_EVENT);
+        auto *mixed_add   = new Button(p->m_panel_mixed_filaments_title, _L("Add"));
+        mixed_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            if (!wxGetApp().preset_bundle) return;
+            auto *co = wxGetApp().preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour");
+            std::vector<std::string> colors = co ? co->values : std::vector<std::string>();
+            if (colors.size() < 2) {
+                MessageDialog(this, _L("Add at least two filaments before creating a mixed filament."),
+                              _L("Mixed Filaments"), wxOK | wxICON_INFORMATION).ShowModal();
+                return;
+            }
+            std::vector<std::string> names, types;
+            for (size_t i = 0; i < colors.size(); ++i)
+                names.push_back("Filament " + std::to_string(i + 1));
+            MixedFilamentDialog dlg(this, colors, names, types);
+            if (dlg.ShowModal() == wxID_OK) {
+                auto &mgr = wxGetApp().preset_bundle->mixed_filaments;
+                MixedFilament mf = dialog_result_to_mixed_filament(dlg.get_result(), colors);
+                mgr.mixed_filaments().push_back(mf);
+                // Persist to the print config so slicing + auto-rebuild pick it up.
+                const std::string serialized = mgr.serialize_custom_entries();
+                wxGetApp().preset_bundle->project_config.option<ConfigOptionString>("mixed_filament_definitions", true)->value = serialized;
+                if (auto *tab = wxGetApp().get_tab(Preset::TYPE_PRINT)) {
+                    DynamicPrintConfig new_conf = *tab->get_config();
+                    new_conf.set_key_value("mixed_filament_definitions", new ConfigOptionString(serialized));
+                    tab->load_config(new_conf);
+                }
+                wxGetApp().preset_bundle->update_multi_material_filament_presets();
+                update_mixed_filament_panel();
+                if (wxGetApp().plater()) wxGetApp().plater()->update();
+            }
+        });
+        wxBoxSizer *h_mixed_title = new wxBoxSizer(wxHORIZONTAL);
+        h_mixed_title->Add(mixed_icon, 0, wxALIGN_CENTRE | wxLEFT, FromDIP(SidebarProps::TitlebarMargin()));
+        h_mixed_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
+        h_mixed_title->Add(mixed_label, 1, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
+        h_mixed_title->Add(mixed_add, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
+        h_mixed_title->SetMinSize(-1, 3 * em);
+        p->m_panel_mixed_filaments_title->SetSizer(h_mixed_title);
+        p->m_panel_mixed_filaments_title->Layout();
+
+        p->m_panel_mixed_filaments_content = new wxPanel(p->scrolled, wxID_ANY);
+        p->m_sizer_mixed_filaments_content = new wxBoxSizer(wxVERTICAL);
+        p->m_panel_mixed_filaments_content->SetSizer(p->m_sizer_mixed_filaments_content);
+
+        scrolled_sizer->Add(p->m_panel_mixed_filaments_title, 0, wxEXPAND | wxALL, 0);
+        scrolled_sizer->Add(p->m_panel_mixed_filaments_content, 0, wxEXPAND, 0);
+        p->m_panel_mixed_filaments_title->Hide();
+        p->m_panel_mixed_filaments_content->Hide();
+    }
+
     {
     //add project title
     auto params_panel = ((MainFrame*)parent->GetParent())->m_param_panel;
@@ -2449,6 +2515,49 @@ void Sidebar::remove_unused_filament_combos(const size_t current_extruder_count)
     }
 }
 
+// Snapmaker "Full Spectrum": rebuild the minimal Mixed Filaments list panel from
+// the manager's enabled mixed (virtual) filaments. Hidden when there are none.
+void Sidebar::update_mixed_filament_panel(bool /*sync_manager*/)
+{
+    if (!p->m_panel_mixed_filaments_title || !p->m_panel_mixed_filaments_content)
+        return;
+    if (wxGetApp().preset_bundle == nullptr)
+        return;
+
+    wxWindowUpdateLocker noUpdates(p->m_panel_mixed_filaments_content);
+    p->m_sizer_mixed_filaments_content->Clear(true);
+
+    const auto &mgr    = wxGetApp().preset_bundle->mixed_filaments;
+    const auto &colors = mgr.display_colors();
+    const auto &rows   = mgr.mixed_filaments();
+
+    size_t shown = 0;
+    size_t color_idx = 0;
+    for (const auto &mf : rows) {
+        if (!mf.enabled)
+            continue;
+        const std::string hex = (color_idx < colors.size()) ? colors[color_idx] : std::string("#26A69A");
+        ++color_idx;
+        wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
+        wxColour col; col.Set(from_u8(hex));
+        auto *swatch = new wxPanel(p->m_panel_mixed_filaments_content, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(18), FromDIP(18)));
+        swatch->SetBackgroundColour(col);
+        wxString label = wxString::Format("F%u + F%u", mf.component_a, mf.component_b);
+        auto *txt = new Label(p->m_panel_mixed_filaments_content, label, LB_PROPAGATE_MOUSE_EVENT);
+        row->Add(swatch, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
+        row->Add(txt, 1, wxALIGN_CENTER);
+        p->m_sizer_mixed_filaments_content->Add(row, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(2));
+        ++shown;
+    }
+
+    const bool any = shown > 0;
+    p->m_panel_mixed_filaments_title->Show(any);
+    p->m_panel_mixed_filaments_content->Show(any);
+    p->m_panel_mixed_filaments_content->Layout();
+    if (p->scrolled)
+        p->scrolled->Layout();
+}
+
 void Sidebar::update_all_preset_comboboxes()
 {
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
@@ -2567,6 +2676,9 @@ void Sidebar::update_all_preset_comboboxes()
     // Orca:: show device tab based on vendor type
     p_mainframe->show_device(preset_bundle.use_bbl_device_tab());
     p_mainframe->m_tabpanel->SetSelection(p_mainframe->m_tabpanel->GetSelection());
+
+    // Snapmaker "Full Spectrum": keep the mixed filaments list in sync.
+    update_mixed_filament_panel();
 }
 
 void Sidebar::update_presets(Preset::Type preset_type)
@@ -17069,17 +17181,28 @@ void Plater::on_activate()
 }
 
 // Get vector of extruder colors considering filament color, if extruder color is undefined.
-std::vector<std::string> Plater::get_extruder_colors_from_plater_config(const GCodeProcessorResult* const result) const
+std::vector<std::string> Plater::get_extruder_colors_from_plater_config(const GCodeProcessorResult* const result, bool include_mixed) const
 {
     if (wxGetApp().is_gcode_viewer() && result != nullptr)
         return result->extruder_colors;
     else {
+        if (wxGetApp().preset_bundle == nullptr)
+            return {};
         const Slic3r::DynamicPrintConfig* config = &wxGetApp().preset_bundle->project_config;
         std::vector<std::string> filament_colors;
         if (!config->has("filament_colour")) // in case of a SLA print
             return filament_colors;
 
         filament_colors = (config->option<ConfigOptionStrings>("filament_colour"))->values;
+
+        // Snapmaker "Full Spectrum": append display colours for enabled mixed
+        // (virtual) filaments so they are selectable/paintable. Empty (inert)
+        // until the user enables mixed combinations.
+        if (include_mixed) {
+            const auto &mixed_mgr = wxGetApp().preset_bundle->mixed_filaments;
+            for (const auto &dc : mixed_mgr.display_colors())
+                filament_colors.push_back(dc);
+        }
         return filament_colors;
     }
 }

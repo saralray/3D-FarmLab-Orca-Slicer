@@ -31,6 +31,11 @@ public:
 
     DropDown & GetDropDown() { return drop; }
 
+    // Called right before the dropdown popup is measured and shown (on mouse,
+    // keyboard, or programmatic open). Default no-op; subclasses can override to
+    // refresh/rebuild items so the list reflects fresh data each time it opens.
+    virtual void OnPopupOpening() {}
+
     virtual bool SetFont(wxFont const & font) override;
 
 public:

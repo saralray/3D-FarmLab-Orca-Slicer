@@ -219,6 +219,9 @@ public:
     void update() override;
     void msw_rescale() override;
     void OnSelect(wxCommandEvent& evt) override;
+    // >>> PRINTFARM: refresh farm printer status each time the dropdown opens.
+    void OnPopupOpening() override;
+    // <<< PRINTFARM
     void update_badge_according_flag();
 
     FilamentColor get_cur_color_info();

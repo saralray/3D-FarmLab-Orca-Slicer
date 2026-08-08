@@ -33,6 +33,10 @@ public:
     PfResult get_jobs(std::vector<PfJob>& out) override;
     PfResult get_job(const std::string& id, PfJob& out) override;
     PfResult cancel_job(const std::string& id) override;
+    PfResult mark_job_printed(const std::string& id) override;
+    PfResult download_job(const std::string& id,
+                          const std::string& dest_path,
+                          const ProgressFn&  on_progress) override;
 
     PfResult mint_upload_token() override;
     PfResult revoke_upload_token() override;

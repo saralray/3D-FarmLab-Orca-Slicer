@@ -162,6 +162,8 @@ public:
     void init_filament_combo(PlaterPresetComboBox **combo, const int filament_idx);
     void remove_unused_filament_combos(const size_t current_extruder_count);
     void update_all_preset_comboboxes();
+    // Snapmaker "Full Spectrum": rebuild the Mixed Filaments sidebar list.
+    void update_mixed_filament_panel(bool sync_manager = true);
     //void update_partplate(PartPlateList& list);
     void update_presets(Slic3r::Preset::Type preset_type);
     //BBS
@@ -577,7 +579,7 @@ public:
     void force_print_bed_update();
     // On activating the parent window.
     void on_activate();
-    std::vector<std::string> get_extruder_colors_from_plater_config(const GCodeProcessorResult* const result = nullptr) const;
+    std::vector<std::string> get_extruder_colors_from_plater_config(const GCodeProcessorResult* const result = nullptr, bool include_mixed = true) const;
     std::vector<std::string> get_filament_colors_render_info() const;
     std::vector<std::string> get_filament_color_render_type() const;
     std::vector<std::string> get_colors_for_color_print(const GCodeProcessorResult* const result = nullptr) const;

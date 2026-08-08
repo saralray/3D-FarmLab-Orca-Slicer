@@ -1,6 +1,7 @@
 #include "PresetComboBoxes.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -16,6 +17,9 @@
 #include <wx/menu.h>
 #include <wx/odcombo.h>
 #include <wx/listbook.h>
+#include <wx/dcmemory.h>
+#include <wx/dcgraph.h>
+#include <wx/image.h>
 
 #ifdef _WIN32
 #include <wx/msw/dcclient.h>
@@ -510,18 +514,32 @@ int PresetComboBox::selected_connected_printer() const
 }
 
 // >>> PRINTFARM
-// A small solid-colour status swatch shown next to each farm printer in the
-// dropdown: green = idle, blue = printing, grey = offline/unknown. Reuses the same
-// BitmapCache::mksolid path the filament colour swatches use.
+// A small round status dot shown next to each farm printer in the dropdown:
+// green = idle, blue = printing, grey = offline/unknown. Drawn as an antialiased
+// filled circle on a transparent bitmap (wxGCDC), so it reads as a dot, not a swatch.
 wxBitmap PresetComboBox::farm_status_bitmap(const std::string& status)
 {
-    unsigned char r = 0x9A, g = 0x9A, b = 0x9A; // offline / unknown
-    if (status == "printing") { r = 0x1A; g = 0x88; b = 0xE0; } // blue
-    else if (status == "idle") { r = 0x2E; g = 0xA0; b = 0x43; } // green
+    wxColour colour(0x9A, 0x9A, 0x9A); // offline / unknown grey
+    if (status == "printing")  colour = wxColour(0x1A, 0x88, 0xE0); // blue
+    else if (status == "idle") colour = wxColour(0x2E, 0xA0, 0x43); // green
 
-    const size_t sz = std::max<size_t>(1, icon_height);
-    return bitmap_cache().mksolid(sz, sz, r, g, b, wxALPHA_OPAQUE, false, 1,
-                                  Slic3r::GUI::wxGetApp().dark_mode());
+    const int sz = std::max(1, icon_height);
+
+    // Start from a fully-transparent 32-bit bitmap so only the circle is painted.
+    wxImage image(sz, sz);
+    image.InitAlpha();
+    std::memset(image.GetAlpha(), 0, static_cast<size_t>(sz) * sz);
+    wxBitmap bmp(image);
+
+    wxMemoryDC mdc(bmp);
+    wxGCDC     gdc(mdc);
+    gdc.SetPen(*wxTRANSPARENT_PEN);
+    gdc.SetBrush(wxBrush(colour));
+    const int inset = FromDIP(2);
+    const int d     = std::max(1, sz - 2 * inset);
+    gdc.DrawEllipse(inset, inset, d, d);
+    mdc.SelectObject(wxNullBitmap);
+    return bmp;
 }
 
 // List the backend-synced farm printers under a "Print Farm" header. These are
@@ -1171,6 +1189,21 @@ void PlaterPresetComboBox::select_farm_printer(int farm_idx)
         if (m_first_farm_idx && it != m_farm_ids.end())
             this->SetSelection(m_first_farm_idx + (int) std::distance(m_farm_ids.begin(), it));
     });
+}
+
+// Refresh farm printer status every time the printer dropdown is opened: sync the
+// live status from the backend, then rebuild the items so the status dots/labels
+// are current. Runs before the popup is measured (see ComboBox::OnPopupOpening).
+// No-op for non-printer combos or when not signed in to the farm.
+void PlaterPresetComboBox::OnPopupOpening()
+{
+    if (m_type != Preset::TYPE_PRINTER)
+        return;
+    auto& mgr = Slic3r::GUI::PrintFarmManager::instance();
+    if (!mgr.is_logged_in())
+        return;
+    mgr.refresh_printers();
+    update();
 }
 // <<< PRINTFARM
 
