@@ -107,37 +107,82 @@ bool profile_supports_upload(const std::string& profile)
            profile == "bambulab_h2c";
 }
 
+// Type-tolerant field readers. json::value() and get<std::string>() THROW
+// (type_error.302) when a key is present but holds a different type, and one
+// such field used to abort the parse of the WHOLE response — a printer in error
+// state blanked the entire farm list. The backend's telemetry can legitimately
+// re-type a field on its way through the poller's Redis cache, so read
+// defensively: a wrong type degrades to its text form (or the default), never
+// to an exception.
+std::string json_str(const json& j, const char* key)
+{
+    if (!j.is_object() || !j.contains(key))
+        return {};
+    const json& v = j[key];
+    if (v.is_null())
+        return {};
+    if (v.is_string())
+        return v.get<std::string>();
+    return v.dump(); // number / bool / object → readable text rather than a throw
+}
+
+double json_num(const json& j, const char* key, double def)
+{
+    if (!j.is_object() || !j.contains(key))
+        return def;
+    const json& v = j[key];
+    if (v.is_number())
+        return v.get<double>();
+    if (v.is_string()) {
+        try {
+            return std::stod(v.get<std::string>());
+        } catch (...) {
+            return def;
+        }
+    }
+    return def;
+}
+
 PfPrinter parse_printer(const json& j)
 {
     PfPrinter p;
-    p.id            = j.value("id", std::string{});
-    p.name          = j.value("name", std::string{});
-    p.model         = j.value("model", std::string{});
-    p.profile       = j.value("profile", std::string{});
-    p.status        = j.value("status", std::string{});
-    if (j.contains("errorMessage") && !j["errorMessage"].is_null())
-        p.error_message = j["errorMessage"].get<std::string>();
-    p.can_upload = profile_supports_upload(p.profile);
-    if (j.contains("spools") && j["spools"].is_array()) {
+    p.id            = json_str(j, "id");
+    p.name          = json_str(j, "name");
+    p.model         = json_str(j, "model");
+    p.profile       = json_str(j, "profile");
+    p.status        = json_str(j, "status");
+    p.error_message = json_str(j, "errorMessage");
+    p.can_upload    = profile_supports_upload(p.profile);
+    if (j.is_object() && j.contains("spools") && j["spools"].is_array()) {
         for (const auto& s : j["spools"]) {
             PfSpool spool;
-            spool.id        = s.value("id", std::string{});
-            spool.color     = s.value("color", std::string{});
-            spool.material  = s.value("material", std::string{});
-            spool.remaining = s.value("remaining", 0.0);
-            spool.weight    = s.value("weight", 0.0);
+            spool.id        = json_str(s, "id");
+            spool.color     = json_str(s, "color");
+            spool.material  = json_str(s, "material");
+            spool.remaining = json_num(s, "remaining", 0.0);
+            spool.weight    = json_num(s, "weight", 0.0);
             p.spools.push_back(std::move(spool));
         }
     }
     return p;
 }
 
-// Map a backend queue row's printed_status to our PfJobStatus.
+// Map a backend queue row's printed_status to our PfJobStatus. The backend
+// serializes printedStatus as an INTEGER (0 = queued, 1 = printed), so it is read
+// numerically first; the string forms are kept for older/other payload shapes.
 PfJobStatus map_queue_status(const json& j)
 {
-    const std::string s = j.value("printedStatus", j.value("printed_status", std::string{}));
+    if (j.is_object()) {
+        for (const char* key : {"printedStatus", "printed_status"}) {
+            if (j.contains(key) && j[key].is_number())
+                return j[key].get<double>() >= 1 ? PfJobStatus::Completed : PfJobStatus::Queued;
+        }
+    }
+    std::string s = json_str(j, "printedStatus");
+    if (s.empty())
+        s = json_str(j, "printed_status");
     if (s == "printing")  return PfJobStatus::Printing;
-    if (s == "printed" || s == "done" || s == "completed") return PfJobStatus::Completed;
+    if (s == "printed" || s == "done" || s == "completed" || s == "1") return PfJobStatus::Completed;
     if (s == "failed" || s == "error")     return PfJobStatus::Failed;
     if (s == "cancelled" || s == "canceled") return PfJobStatus::Cancelled;
     return PfJobStatus::Queued;
@@ -342,8 +387,16 @@ PfResult RestPrintFarmClient::get_printers(std::vector<PfPrinter>& out)
     try {
         auto j = json::parse(resp);
         const auto& arr = j.is_array() ? j : (j.contains("printers") ? j["printers"] : json::array());
-        for (const auto& item : arr)
-            out.push_back(parse_printer(item));
+        // Each record is parsed in isolation: one malformed printer is skipped
+        // (and named in the log) instead of taking the whole farm list down with
+        // it, which is what a single unexpected field type used to do.
+        for (const auto& item : arr) {
+            try {
+                out.push_back(parse_printer(item));
+            } catch (const std::exception& e) {
+                PF_LOG(warning) << "skipping unparseable printer record: " << e.what();
+            }
+        }
     } catch (const std::exception& e) {
         return PfResult::failure(std::string("Could not parse printer list: ") + e.what());
     }
@@ -402,16 +455,30 @@ PfResult RestPrintFarmClient::get_jobs(std::vector<PfJob>& out)
     try {
         auto j = json::parse(resp);
         const auto& arr = j.is_array() ? j : (j.contains("jobs") ? j["jobs"] : json::array());
+        // Same per-record isolation as the printer list: a single odd row must
+        // not empty the queue view.
         for (const auto& item : arr) {
-            PfJob job;
-            job.id           = item.value("id", std::string{});
-            job.name         = item.value("filename", item.value("name", std::string{}));
-            job.printer_id   = item.value("printerId", item.value("printer_id", std::string{}));
-            job.printer_name = item.value("printerName", std::string{});
-            job.submitted_at = item.value("submittedAt", item.value("submitted_at", std::string{}));
-            job.submitter    = item.value("submitterName", item.value("submitter", std::string{}));
-            job.status       = map_queue_status(item);
-            out.push_back(std::move(job));
+            try {
+                PfJob job;
+                job.id           = json_str(item, "id");
+                job.name         = json_str(item, "filename");
+                if (job.name.empty())
+                    job.name = json_str(item, "name");
+                job.printer_id   = json_str(item, "printerId");
+                if (job.printer_id.empty())
+                    job.printer_id = json_str(item, "printer_id");
+                job.printer_name = json_str(item, "printerName");
+                job.submitted_at = json_str(item, "submittedAt");
+                if (job.submitted_at.empty())
+                    job.submitted_at = json_str(item, "submitted_at");
+                job.submitter    = json_str(item, "submitterName");
+                if (job.submitter.empty())
+                    job.submitter = json_str(item, "submitter");
+                job.status       = map_queue_status(item);
+                out.push_back(std::move(job));
+            } catch (const std::exception& e) {
+                PF_LOG(warning) << "skipping unparseable queue row: " << e.what();
+            }
         }
     } catch (const std::exception& e) {
         return PfResult::failure(std::string("Could not parse jobs: ") + e.what());
