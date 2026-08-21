@@ -280,7 +280,6 @@ set(lisbslic3r_sources
     Layer.cpp
     Layer.hpp
     LayerRegion.cpp
-    LocalZOrderOptimizer.hpp
     libslic3r.cpp
     libslic3r.h
     Line.cpp
@@ -296,11 +295,6 @@ set(lisbslic3r_sources
     MinAreaBoundingBox.hpp
     MinimumSpanningTree.cpp
     MinimumSpanningTree.hpp
-    MixedFilament.cpp
-    MixedFilament.hpp
-    filament_mixer.cpp
-    filament_mixer.h
-    filament_mixer_model.h
     miniz_extension.cpp
     miniz_extension.hpp
     ModelArrange.cpp

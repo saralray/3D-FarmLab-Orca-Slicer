@@ -47,9 +47,6 @@ public:
 
 	// Set the extruder properties.
     void set_extruder(size_t idx, const PrintConfig& config);
-    // Snapmaker "Full Spectrum": Local-Z runtime toolchange reserve area.
-    void plan_local_z_reserve(float z_par, float layer_height_par, size_t reserve_slot_count, float wipe_volume = 0.f);
-    std::vector<std::vector<WipeTower::box_coordinates>> get_local_z_reserve_boxes() const;
 
 	// Appends into internal structure m_plan containing info about the future wipe tower
 	// to be used before building begins. The entries must be added ordered in z.
@@ -135,9 +132,6 @@ public:
 	// Returns gcode for a toolchange and a final print head position.
 	// On the first layer, extrude a brim around the future wipe tower first.
     WipeTower::ToolChangeResult tool_change(size_t new_tool);
-    // Snapmaker "Full Spectrum": emit a compact runtime Local-Z toolchange into a reserved slot.
-    WipeTower::ToolChangeResult local_z_tool_change(size_t new_tool, const WipeTower::box_coordinates& cleaning_box, float wipe_volume);
-    void set_current_tool(size_t tool) { m_current_tool = tool; }
 
 	// Fill the unfilled space with a sparse infill.
 	// Call this method only if layer_finished() is false.
@@ -261,7 +255,6 @@ private:
     Vec2f m_bed_bottom_left; // bottom-left corner coordinates (for rectangular beds)
 
 	float m_perimeter_width = 0.4f * Width_To_Nozzle_Ratio; // Width of an extrusion line, also a perimeter spacing for 100% infill.
-	float           m_local_z_wipe_tower_purge_lines = 3.f; // Snapmaker "Full Spectrum": purge lines per Local-Z toolchange.
 	float m_extrusion_flow = 0.038f; //0.029f;// Extrusion flow is derived from m_perimeter_width, layer height and filament diameter.
 
 	// Extruder specific parameters.
@@ -317,11 +310,6 @@ private:
 		float height;	// layer height
 		float depth;	// depth of the layer based on all layers above
 		float toolchanges_depth() const { float sum = 0.f; for (const auto &a : tool_changes) sum += a.required_depth; return sum; }
-		// Snapmaker "Full Spectrum": reserved Local-Z runtime toolchange slots.
-		float local_z_reserve_slot_depth { 0.f };
-		size_t local_z_reserve_slot_count { 0 };
-		float local_z_reserve_depth() const { return local_z_reserve_slot_depth * float(local_z_reserve_slot_count); }
-		float planned_depth() const { return toolchanges_depth() + local_z_reserve_depth(); }
 
 		std::vector<ToolChange> tool_changes;
 

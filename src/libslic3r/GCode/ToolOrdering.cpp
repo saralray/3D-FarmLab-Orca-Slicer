@@ -20,7 +20,6 @@
 #include <cassert>
 #include <limits>
 #include <algorithm>
-#include <cmath>
 #include <unordered_map>
 
 #include <libslic3r.h>
@@ -35,46 +34,6 @@ namespace Slic3r {
 #endif
 
 const static bool g_wipe_into_objects = false;
-
-namespace {
-
-// Snapmaker "Full Spectrum": resolve a 1-based filament ID that may refer to a
-// virtual mixed filament into a concrete physical extruder (1-based) for the
-// given layer. When the ID is not a mixed filament (or no manager / no enabled
-// mixed rows), the input is returned unchanged, so behaviour is identical to a
-// build without mixed filaments.
-unsigned int resolve_mixed_with_layer_heights(const MixedFilamentManager *mixed_mgr,
-                                              size_t                      num_physical,
-                                              unsigned int                filament_id_1based,
-                                              int                         layer_index,
-                                              float                       layer_print_z,
-                                              float                       layer_height,
-                                              float                       layer_height_a,
-                                              float                       layer_height_b,
-                                              float                       base_layer_height)
-{
-    if (!(mixed_mgr && mixed_mgr->is_mixed(filament_id_1based, num_physical)))
-        return filament_id_1based;
-
-    const MixedFilament *mixed_row = mixed_mgr->mixed_filament_from_id(filament_id_1based, num_physical);
-    const bool is_custom_mixed = mixed_row != nullptr && mixed_row->custom;
-
-    // Dithering cadence heights A/B convert to an A:B layer ratio.
-    if (!is_custom_mixed && (layer_height_a > 0.f || layer_height_b > 0.f)) {
-        const float safe_base = std::max<float>(0.01f, base_layer_height);
-        const int ratio_a = std::max(1, int(std::lround((layer_height_a > 0.f ? layer_height_a : safe_base) / safe_base)));
-        const int ratio_b = std::max(1, int(std::lround((layer_height_b > 0.f ? layer_height_b : safe_base) / safe_base)));
-        const int cycle   = ratio_a + ratio_b;
-        if (cycle > 0 && mixed_row != nullptr) {
-            const int pos = ((layer_index % cycle) + cycle) % cycle;
-            return pos < ratio_a ? mixed_row->component_a : mixed_row->component_b;
-        }
-    }
-
-    return mixed_mgr->resolve(filament_id_1based, num_physical, layer_index, layer_print_z, layer_height);
-}
-
-} // namespace
 constexpr double similar_color_threshold_de2000 = 20.0;
 
 static std::set<int>get_filament_by_type(const std::vector<unsigned int>& used_filaments, const PrintConfig* print_config, const std::string& type)
@@ -120,42 +79,23 @@ bool check_filament_printable_after_group(const std::vector<unsigned int> &used_
     return true;
 }
 
-// Snapmaker "Full Spectrum": resolve a 1-based filament ID through the mixed
-// filament manager for this layer. Returns the ID unchanged when it is not a
-// mixed (virtual) filament.
-unsigned int LayerTools::resolve_mixed_1based(unsigned int filament_id) const
-{
-    return resolve_mixed_with_layer_heights(mixed_mgr,
-                                            num_physical,
-                                            filament_id,
-                                            this->layer_index,
-                                            float(this->print_z),
-                                            float(this->layer_height),
-                                            mixed_layer_height_a,
-                                            mixed_layer_height_b,
-                                            mixed_base_layer_height);
-}
-
 // Return a zero based extruder from the region, or extruder_override if overriden.
 unsigned int LayerTools::wall_extruder_id(const PrintRegion &region) const
 {
 	assert(region.config().outer_wall_filament_id.value > 0);
-	unsigned int id = (this->extruder_override == 0) ? region.config().outer_wall_filament_id.value : this->extruder_override;
-	return resolve_mixed_1based(id) - 1;
+	return ((this->extruder_override == 0) ? region.config().outer_wall_filament_id.value : this->extruder_override) - 1;
 }
 
 unsigned int LayerTools::sparse_infill_filament_id(const PrintRegion &region) const
 {
 	assert(region.config().sparse_infill_filament_id.value > 0);
-	unsigned int id = (this->extruder_override == 0) ? region.config().sparse_infill_filament_id.value : this->extruder_override;
-	return resolve_mixed_1based(id) - 1;
+	return ((this->extruder_override == 0) ? region.config().sparse_infill_filament_id.value : this->extruder_override) - 1;
 }
 
 unsigned int LayerTools::internal_solid_filament_id(const PrintRegion &region) const
 {
 	assert(region.config().internal_solid_filament_id.value > 0);
-	unsigned int id = (this->extruder_override == 0) ? region.config().internal_solid_filament_id.value : this->extruder_override;
-	return resolve_mixed_1based(id) - 1;
+	return ((this->extruder_override == 0) ? region.config().internal_solid_filament_id.value : this->extruder_override) - 1;
 }
 
 // Returns a zero based extruder this eec should be printed with, according to PrintRegion config or extruder_override if overriden.
@@ -191,7 +131,7 @@ unsigned int LayerTools::extruder(const ExtrusionEntityCollection &extrusions, c
     } else
         extruder = this->extruder_override;
 
-    return (extruder == 0) ? 0 : resolve_mixed_1based(extruder) - 1;
+    return (extruder == 0) ? 0 : extruder - 1;
 }
 
 static double calc_max_layer_height(const PrintConfig &config, double max_object_layer_height)
@@ -456,13 +396,8 @@ void ToolOrdering::sort_and_build_data(const PrintObject& object , unsigned int 
 ToolOrdering::ToolOrdering(const PrintObject &object, unsigned int first_extruder, bool prime_multi_material)
 {
     m_print_full_config = &object.print()->full_print_config();
-    m_print_config_ptr = &object.print()->config();
     m_print_object_ptr = &object;
     m_print = const_cast<Print*>(object.print());
-    // Snapmaker "Full Spectrum": mixed filament support.
-    m_mixed_mgr    = &object.print()->mixed_filament_manager();
-    m_num_physical = object.print()->config().filament_diameter.size();
-    update_mixed_layer_height_settings();
     if (object.layers().empty())
         return;
 
@@ -508,10 +443,6 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
     m_print_full_config = &print.full_print_config();
     m_print = const_cast<Print *>(&print);  // for update the context of print
     m_print_config_ptr = &print.config();
-    // Snapmaker "Full Spectrum": mixed filament support.
-    m_mixed_mgr    = &print.mixed_filament_manager();
-    m_num_physical = print.config().filament_diameter.size();
-    update_mixed_layer_height_settings();
 
     // Initialize the print layers for all objects and all layers.
     coordf_t max_layer_height = 0.;
@@ -541,11 +472,7 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
         print.model().get_curr_plate_custom_gcodes().mode == CustomGCode::MultiAsSingle) {
 		// Printing a single extruder platter on a printer with more than 1 extruder (or single-extruder multi-material).
 		// There may be custom per-layer tool changes available at the model.
-        // Snapmaker "Full Spectrum": include virtual mixed filaments so per-layer
-        // tool changes onto a mixed (virtual) ID are accepted; falls back to the
-        // physical count when no mixed filaments are enabled.
-        const size_t num_total = (m_mixed_mgr == nullptr) ? num_filaments : m_mixed_mgr->total_filaments(num_filaments);
-        per_layer_extruder_switches = custom_tool_changes(print.model().get_curr_plate_custom_gcodes(), num_total);
+        per_layer_extruder_switches = custom_tool_changes(print.model().get_curr_plate_custom_gcodes(), num_filaments);
 	}
 
     // Collect extruders reuqired to print the layers.
@@ -566,51 +493,6 @@ ToolOrdering::ToolOrdering(const Print &print, unsigned int first_extruder, bool
     this->collect_extruder_statistics(prime_multi_material);
 
     this->mark_skirt_layers(print.config(), max_layer_height);
-}
-
-// Snapmaker "Full Spectrum": pull mixed-layer cadence settings from print config.
-void ToolOrdering::update_mixed_layer_height_settings()
-{
-    const PrintConfig *cfg = m_print_config_ptr;
-    if (cfg == nullptr && m_print_object_ptr != nullptr)
-        cfg = &m_print_object_ptr->print()->config();
-
-    m_mixed_layer_height_a = 0.f;
-    m_mixed_layer_height_b = 0.f;
-    if (m_print_full_config != nullptr &&
-        m_print_full_config->has("mixed_color_layer_height_a") &&
-        m_print_full_config->has("mixed_color_layer_height_b")) {
-        m_mixed_layer_height_a = float(m_print_full_config->opt_float("mixed_color_layer_height_a"));
-        m_mixed_layer_height_b = float(m_print_full_config->opt_float("mixed_color_layer_height_b"));
-    } else if (cfg != nullptr) {
-        m_mixed_layer_height_a = cfg->mixed_color_layer_height_a.value;
-        m_mixed_layer_height_b = cfg->mixed_color_layer_height_b.value;
-    }
-
-    float base_height = 0.2f;
-    if (m_print_object_ptr != nullptr)
-        base_height = float(m_print_object_ptr->config().layer_height.value);
-    else if (m_print_full_config != nullptr && m_print_full_config->has("layer_height"))
-        base_height = float(m_print_full_config->opt_float("layer_height"));
-
-    m_mixed_base_layer_height = std::max<float>(0.01f, base_height);
-}
-
-// Resolve a 1-based filament ID through the mixed-filament manager.
-unsigned int ToolOrdering::resolve_mixed(unsigned int filament_id_1based,
-                                         int          layer_index,
-                                         float        layer_print_z,
-                                         float        layer_height) const
-{
-    return resolve_mixed_with_layer_heights(m_mixed_mgr,
-                                            m_num_physical,
-                                            filament_id_1based,
-                                            layer_index,
-                                            layer_print_z,
-                                            layer_height,
-                                            m_mixed_layer_height_a,
-                                            m_mixed_layer_height_b,
-                                            m_mixed_base_layer_height);
 }
 
 static void apply_first_layer_order(const DynamicPrintConfig* config, std::vector<unsigned int>& tool_order) {
@@ -788,25 +670,9 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
     std::vector<int> firstLayerExtruders;
     firstLayerExtruders.clear();
 
-    // Snapmaker "Full Spectrum": propagate the mixed-filament resolution context
-    // onto every LayerTools so leaf accessors (wall/infill/solid) can map virtual
-    // IDs back to physical extruders. When no mixed filaments are enabled this is
-    // inert (resolution returns the input unchanged).
-    for (LayerTools &lt : m_layer_tools) {
-        lt.mixed_mgr               = m_mixed_mgr;
-        lt.num_physical            = m_num_physical;
-        lt.mixed_layer_height_a    = m_mixed_layer_height_a;
-        lt.mixed_layer_height_b    = m_mixed_layer_height_b;
-        lt.mixed_base_layer_height = m_mixed_base_layer_height;
-    }
-
     // Collect the object extruders.
     for (auto layer : object.layers()) {
         LayerTools &layer_tools = this->tools_for_layer(layer->print_z);
-        // Store the sequential layer index and layer height for mixed-filament resolution.
-        layer_tools.layer_index        = layerCount;
-        layer_tools.object_layer_count = int(object.layers().size());
-        layer_tools.layer_height       = layer->height;
 
         // Override extruder with the next
     	for (; it_per_layer_extruder_override != per_layer_extruder_switches.end() && it_per_layer_extruder_override->first < layer->print_z + EPSILON; ++ it_per_layer_extruder_override)
@@ -935,14 +801,6 @@ void ToolOrdering::collect_extruders(const PrintObject &object, const std::vecto
             layer_tools.wiping_extrusions().is_support_overriddable_and_mark(role, object);
         }
     }
-
-    // Snapmaker "Full Spectrum": resolve any virtual mixed-filament IDs collected
-    // above (1-based) into concrete physical extruders for each layer before the
-    // extruder lists are deduplicated and ordered. resolve_mixed_1based() leaves
-    // physical IDs (and the 0 "don't care" sentinel) untouched.
-    for (auto& layer : m_layer_tools)
-        for (auto& e : layer.extruders)
-            e = resolve_mixed(e, layer.layer_index, float(layer.print_z), float(layer.layer_height));
 
     for (auto& layer : m_layer_tools) {
         // Sort and remove duplicates

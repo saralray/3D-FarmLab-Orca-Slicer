@@ -2655,7 +2655,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("wipe_tower_bridging", "multimaterial_settings_prime_tower#maximal-bridging-distance");
         optgroup->append_single_option_line("wipe_tower_extra_spacing", "multimaterial_settings_prime_tower#wipe-tower-purge-lines-spacing");
         optgroup->append_single_option_line("wipe_tower_extra_flow", "multimaterial_settings_prime_tower#extra-flow-for-purge");
-        optgroup->append_single_option_line("local_z_wipe_tower_purge_lines", "multimaterial_settings_prime_tower");
         optgroup->append_single_option_line("wipe_tower_max_purge_speed", "multimaterial_settings_prime_tower#maximum-wipe-tower-print-speed");
         optgroup->append_single_option_line("wipe_tower_wall_type", "multimaterial_settings_prime_tower#wall-type");
         optgroup->append_single_option_line("wipe_tower_cone_angle", "multimaterial_settings_prime_tower#stabilization-cone-apex-angle");
@@ -2729,24 +2728,6 @@ void TabPrint::build()
 
         optgroup->append_single_option_line("timelapse_type", "others_settings_special_mode#timelapse");
         optgroup->append_single_option_line("enable_wrapping_detection");
-
-        // Snapmaker "Full Spectrum" mixed-filament / dithering settings. Use default
-        // (no icon) here to avoid runtime bitmap load failures.
-        optgroup = page->new_optgroup(L("Mixed Filaments"));
-        optgroup->append_single_option_line("mixed_filament_gradient_mode");
-        optgroup->append_single_option_line("mixed_filament_height_lower_bound");
-        optgroup->append_single_option_line("mixed_filament_height_upper_bound");
-        optgroup->append_single_option_line("mixed_filament_advanced_dithering");
-        optgroup->append_single_option_line("mixed_filament_pointillism_pixel_size");
-        optgroup->append_single_option_line("mixed_filament_pointillism_line_gap");
-        optgroup->append_single_option_line("mixed_filament_component_bias_enabled");
-        optgroup->append_single_option_line("mixed_filament_surface_indentation");
-        optgroup->append_single_option_line("mixed_filament_region_collapse");
-        optgroup->append_single_option_line("mixed_color_layer_height_a");
-        optgroup->append_single_option_line("mixed_color_layer_height_b");
-        optgroup->append_single_option_line("dithering_z_step_size");
-        optgroup->append_single_option_line("dithering_local_z_mode");
-        optgroup->append_single_option_line("dithering_step_painted_zones_only");
 
         optgroup = page->new_optgroup(L("Fuzzy skin"), L"fuzzy_skin");
         optgroup->append_single_option_line("fuzzy_skin", "others_settings_fuzzy_skin");
